@@ -1218,6 +1218,26 @@ LOCALPROC HaveChangedScreenBuff(ui4r top, ui4r left,
 	dst_rect.w = DestWidth;
 	dst_rect.h = DestHeight;
 
+	if (UseFullScreen) {
+		int ww,wh;
+		float scale_w,scale_h,scale;
+
+		SDL_GetWindowSize(my_main_wind,&ww,&wh);
+
+		// calculate the scale of the framebuffer to perfectly fit the window
+		// size
+		scale_w = ww/src_rect.w;
+		scale_h = wh/src_rect.h;
+		scale = (scale_w<scale_h) ? scale_w : scale_h;
+
+		dst_rect.w = DestWidth * scale;
+		dst_rect.h = DestHeight * scale;
+		dst_rect.x = (ww - dst_rect.w)/2;
+		dst_rect.y = (wh - dst_rect.h)/2;
+
+		SDL_RenderClear(my_renderer);
+	}
+
 	/* SDL_RenderClear(my_renderer); */
 	#if SDL_MAJOR_VERSION >= 3
 	SDL_RenderTexture
@@ -4256,6 +4276,7 @@ LOCALFUNC blnr CreateMainWindow(void)
 		*/
 		#if SDL_MAJOR_VERSION >= 3
 		SDL_SetWindowFullscreen(my_main_wind, true);
+		SDL_SetWindowRelativeMouseMode(my_main_wind,true);
 		#else
 		flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
 		#endif
@@ -4364,12 +4385,7 @@ LOCALFUNC blnr CreateMainWindow(void)
 			SDL_GetError());
 	#if SDL_MAJOR_VERSION >= 3
 	} else
-	if (
-		!SDL_SetTextureScaleMode(
-			my_texture,
-			SDL_SCALEMODE_NEAREST
-		)
-	) {
+	if ( !SDL_SetTextureScaleMode( my_texture, SDL_SCALEMODE_PIXELART)) {
 		fprintf(stderr, "SDL_SetTextureScaleMode fails: %s\n",
 			SDL_GetError());
 	#endif
@@ -4414,6 +4430,7 @@ LOCALFUNC blnr CreateMainWindow(void)
 
 			#if SDL_MAJOR_VERSION >= 3
 			SDL_SetWindowFullscreen(my_main_wind, true);
+			SDL_SetWindowRelativeMouseMode(my_main_wind,true);
 			#if UseSDLscaling
 			SDL_GetWindowSizeInPixels(my_main_wind, &wr, &hr);
 			#else
