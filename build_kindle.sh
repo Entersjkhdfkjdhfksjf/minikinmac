@@ -29,6 +29,9 @@ sed -i 's|-I/usr/X11R6/include||g' Makefile
 sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
 sed -i 's|-lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
 
+# 6. Force the correct ARM strip utility
+sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
+
 echo "=> Cross-compiling the emulator..."
 if ! make; then
     echo "=========================================================="
