@@ -1,5 +1,6 @@
 #!/bin/bash
 # build_kindle.sh
+# Automates the configuration, patching, and compilation of the Kindle PW3 port.
 
 set -e
 
@@ -11,15 +12,16 @@ echo "=> Generating configuration for Linux ARM..."
 chmod +x setup.sh
 ./setup.sh
 
-echo "=========================================================="
-echo "=> TRACING THE X11 VRAM ASSIGNMENT:"
-echo "=========================================================="
-echo "1. Context around the_data:"
-grep -n -B 20 -A 5 "my_image->data = the_data" src/OSGLUXWN.c || true
+echo "=> Patching the generated Makefile..."
+sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
+sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
+sed -i 's|-Isrc/|-Isrc/ -I/usr/arm-linux-gnueabihf/include|g' Makefile
+sed -i 's|-I/usr/X11R6/include||g' Makefile
+sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
+sed -i 's|-lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
+sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
 
-echo -e "\n2. Where is image_Mem1 declared?"
-grep -n -B 2 -A 2 "image_Mem1" src/OSGLUXWN.c || true
-echo "=========================================================="
+echo "=> Cross-compiling the emulator..."
+make
 
-exit 1
-
+echo "=> Build successful! Binary is ready for deployment."
