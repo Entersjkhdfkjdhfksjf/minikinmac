@@ -5,27 +5,27 @@
 set -e
 
 echo "=> Compiling Mini vMac setup tool..."
-# The setup tool must be compiled natively for the host machine running the script
 gcc setup/tool.c -o setup_t
 
-echo "=> Generating configuration for Linux ARM (Framebuffer API)..."
-# -t larm : Target Linux ARM
-# -api fb : Use the raw framebuffer API template
-./setup_t -t larm -api fb > setup.sh
+echo "=> Generating configuration for Linux ARM..."
+# Removed "-api fb". We let it default to X11, but enforce the Kindle PW3 resolution!
+./setup_t -t larm -h 1440 -v 1056 > setup.sh
 chmod +x setup.sh
 ./setup.sh
 
 echo "=> Patching the generated Makefile..."
-# 1. Swap out the default OS Glue file for our custom Kindle e-ink glue
-# This regex catches OSGLUFBX.c, OSGLULNX.c, etc., and replaces it.
+# 1. Swap out the default X11 OS Glue file (OSGLUXWN.c) for our custom Kindle glue
 sed -i 's/OSGLU[A-Z0-9]*\.c/OSGLUKND.c/g' Makefile
 
-# 2. Inject FBInk and evdev libraries into the Linker Flags
-sed -i 's/LDFLAGS =/LDFLAGS = -lfbink /g' Makefile
+# 2. Strip out X11 includes from compiler flags
+sed -i 's/-I\/usr\/X11R6\/include//g' Makefile
+
+# 3. Replace the X11 linker flags (-lX11 -lXext) with our FBInk library
+# Mini vMac Makefiles usually define this as LFLAGS or LDFLAGS. We catch both to be safe.
+sed -i 's/LFLAGS = .*/LFLAGS = -lfbink/g' Makefile
+sed -i 's/LDFLAGS = .*/LDFLAGS = -lfbink/g' Makefile
 
 echo "=> Cross-compiling the emulator..."
-# Override the C compiler with the ARM hard-float toolchain
 make CC=arm-linux-gnueabihf-gcc
 
 echo "=> Build successful! Binary is ready for deployment."
-
