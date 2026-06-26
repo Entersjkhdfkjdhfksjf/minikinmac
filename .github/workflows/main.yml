@@ -71,6 +71,7 @@ jobs:
         run: |
           bash setup.sh
           echo "--- Files created by setup.sh ---"
+          cd src
           ls -la
 
       # ── 6. Replace SDL2 MYOSGLUE.c with our Kindle framebuffer one ──
