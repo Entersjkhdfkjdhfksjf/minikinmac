@@ -41,13 +41,13 @@ jobs:
           # The kual_ext/ folder should already contain your menu.json and launch.sh
           # We just need to create the working directories and move the compiled binary
           
-          #mkdir -p kual_ext/bin kual_ext/disks kual_ext/roms
+          mkdir -p kual_ext/bin kual_ext/disks kual_ext/roms
           
           # Move the compiled emulator into the bin folder
-          #mv minivmac kual_ext/bin/
+          mv minivmac kual_ext/bin/
           
           # Ensure the launcher script has execution rights
-          #chmod +x kual_ext/launch.sh
+          chmod +x kual_ext/launch.sh
 
       - name: Upload KUAL Artifact
         uses: actions/upload-artifact@v4
