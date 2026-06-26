@@ -12,20 +12,17 @@ chmod +x setup.sh
 ./setup.sh
 
 echo "=========================================================="
-echo "=> DUMPING VIDEO LOGIC FOR REVERSE ENGINEERING:"
+echo "=> HOW DOES X11 ASSIGN THE VIDEO BUFFER?"
 echo "=========================================================="
-echo "1. OSGLUXWN.c (X11 Image Creation)"
-grep -B 2 -A 5 "XCreateImage" src/OSGLUXWN.c || true
+# Find exactly where X11 points its image data array
+grep -n -C 2 "\->data" src/OSGLUXWN.c || true
 
-echo -e "\n2. OSGLUXWN.c (Screen Update Function)"
-grep -A 15 "Screen_OutputFrame" src/OSGLUXWN.c || true
-
-echo -e "\n3. CNFGRAPI.h (Screen Macros)"
-grep -i -E "screen|vram|macmem" src/CNFGRAPI.h || true
-
-echo -e "\n4. GLOBGLUE.c (Screen Variables)"
-grep -i -E "vMacScreen|MacMem" src/GLOBGLUE.c || true
+echo "=========================================================="
+echo "=> DUMPING ALL UNFILTERED GLOBALS FROM SCRNEMDV.c:"
+echo "=========================================================="
+# Compile just the screen emulator object using the host compiler to peek at its symbols
+gcc -c src/SCRNEMDV.c -o SCRNEMDV.o -Icfg/ -Isrc/ -Os
+nm SCRNEMDV.o | grep " [BD] " || true
 echo "=========================================================="
 
-echo "=> Diagnostic complete. Intentionally exiting."
 exit 1
