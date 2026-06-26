@@ -1,6 +1,5 @@
 #!/bin/bash
 # build_kindle.sh
-# Automates the configuration, patching, and compilation of the Kindle PW3 port.
 
 set -e
 
@@ -12,16 +11,14 @@ echo "=> Generating configuration for Linux ARM..."
 chmod +x setup.sh
 ./setup.sh
 
-echo "=> Patching the generated Makefile..."
-sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
-sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
-sed -i 's|-Isrc/|-Isrc/ -I/usr/arm-linux-gnueabihf/include|g' Makefile
-sed -i 's|-I/usr/X11R6/include||g' Makefile
-sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
-sed -i 's|-lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
-sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
+echo "=========================================================="
+echo "=> DUMPING THE EXACT MACRO DEFINITIONS:"
+echo "=========================================================="
+echo "[GetCurDrawBuff]"
+grep -rn "GetCurDrawBuff" src/ || true
 
-echo "=> Cross-compiling the emulator..."
-make
+echo -e "\n[vMacScreen]"
+grep -rn "vMacScreen" src/ || true
+echo "=========================================================="
 
-echo "=> Build successful! Binary is ready for deployment."
+exit 1
