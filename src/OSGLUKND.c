@@ -14,10 +14,10 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-// Kindle PW3 target dimensions (Multiple of 32 for Mac constraints)
+// Kindle PW3 target dimensions
 #define KINDLE_WIDTH  1440
 #define KINDLE_HEIGHT 1056
-#define KINDLE_BPP    1    // 8-bit grayscale (1 byte per pixel) on PW3 fb0
+#define KINDLE_BPP    1    // 8-bit grayscale on PW3 fb0
 
 // Globals for Hardware Handles
 static int fbfd = -1;
@@ -27,13 +27,20 @@ static size_t fb_size = 0;
 static FBInkConfig fb_cfg = {0};
 
 // Touchscreen Coordinate Scaling
-static int touch_x_min = 0, touch_x_max = 1448; // Fallbacks
+static int touch_x_min = 0, touch_x_max = 1448;
 static int touch_y_min = 0, touch_y_max = 1072;
 static int current_touch_x = 0;
 static int current_touch_y = 0;
 
+// ---------------------------------------------------------
+// FUNCTION PROTOTYPES (Satisfies -Wmissing-prototypes)
+// ---------------------------------------------------------
+void Kindle_Init(void);
+void Kindle_UpdateScreenRect(int x, int y, int width, int height);
+void Kindle_PollInput(void);
+void Kindle_CleanUp(void);
+
 /* * External hooks into Mini vMac's core 
- * (You will need to map these to the specific macros in your minivmac branch)
  */
 extern uint8_t* GetMacVRAMPointer(void); 
 extern uint16_t ReadMacMemoryShort(uint32_t address);
@@ -44,7 +51,6 @@ extern void InjectMacMouseButton(bool is_down);
 // 1. HARDWARE INITIALIZATION
 // ---------------------------------------------------------
 void Kindle_Init(void) {
-    // A. Initialize FBInk
     fbfd = fbink_open();
     if (fbfd < 0) {
         fprintf(stderr, "Failed to open framebuffer.\n");
@@ -53,19 +59,17 @@ void Kindle_Init(void) {
     fbink_init(fbfd, &fb_cfg);
     
     // Configure for smooth A2 (fast black & white) refresh
-    fb_cfg.is_partial = true;
+    // Removed is_partial (FBInk infers this from the coordinates passed to fbink_refresh)
     fb_cfg.is_flashing = false;
-    fb_cfg.waveform_mode = WAVEFORM_A2;
+    fb_cfg.wfm_mode = WFM_A2; // Corrected member and macro name
 
     // Map Kindle framebuffer to memory
     fb_size = KINDLE_WIDTH * KINDLE_HEIGHT * KINDLE_BPP;
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
 
-    // B. Initialize Touch Input
-    // Note: You may need to probe /dev/input/event* to find the "cyttsp5" controller
+    // Initialize Touch Input
     touch_fd = open("/dev/input/event1", O_RDONLY | O_NONBLOCK);
     if (touch_fd >= 0) {
-        // Dynamically fetch absolute min/max bounds from the kernel driver
         struct input_absinfo abs_x, abs_y;
         if (ioctl(touch_fd, EVIOCGABS(ABS_MT_POSITION_X), &abs_x) >= 0) {
             touch_x_min = abs_x.minimum;
@@ -85,20 +89,18 @@ void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
     if (!fb_mem) return;
 
     uint8_t *mac_vram = GetMacVRAMPointer();
-    int mac_stride = KINDLE_WIDTH / 8; // Mac is 1bpp (8 pixels per byte)
-    int fb_stride = KINDLE_WIDTH * KINDLE_BPP; // Kindle is 8bpp (1 byte per pixel)
+    int mac_stride = KINDLE_WIDTH / 8; 
+    int fb_stride = KINDLE_WIDTH * KINDLE_BPP; 
 
     // Translate 1-bit Mac VRAM into 8-bit Kindle Framebuffer memory
     for (int row = y; row < y + height; row++) {
         for (int col = x; col < x + width; col++) {
             
-            // Read bit from Mac VRAM
             int byte_idx = (row * mac_stride) + (col / 8);
-            int bit_idx = 7 - (col % 8); // Mac MSB is left-most pixel
+            int bit_idx = 7 - (col % 8); 
             uint8_t mac_byte = mac_vram[byte_idx];
-            bool is_black = (mac_byte >> bit_idx) & 1; // Mac: 1 = Black, 0 = White
+            bool is_black = (mac_byte >> bit_idx) & 1; 
             
-            // Write byte to Kindle FB (0x00 = Black, 0xFF = White)
             int fb_idx = (row * fb_stride) + col;
             fb_mem[fb_idx] = is_black ? 0x00 : 0xFF;
         }
@@ -121,27 +123,22 @@ void Kindle_PollInput(void) {
     while (read(touch_fd, &ev, sizeof(struct input_event)) > 0) {
         if (ev.type == EV_ABS) {
             if (ev.code == ABS_MT_POSITION_X) {
-                // Scale absolute X to our 1440 resolution
                 float scale_x = (float)(ev.value - touch_x_min) / (touch_x_max - touch_x_min);
                 current_touch_x = (int)(scale_x * KINDLE_WIDTH);
                 touch_moved = true;
             } 
             else if (ev.code == ABS_MT_POSITION_Y) {
-                // Scale absolute Y to our 1056 resolution
                 float scale_y = (float)(ev.value - touch_y_min) / (touch_y_max - touch_y_min);
                 current_touch_y = (int)(scale_y * KINDLE_HEIGHT);
                 touch_moved = true;
             }
         } 
         else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
-            // value == 1 (Touch Down), value == 0 (Touch Up)
             InjectMacMouseButton(ev.value == 1);
         }
     }
 
-    // If coordinates changed, calculate the Delta to snap the cursor under the finger
     if (touch_moved) {
-        // Read current Mac cursor from 68k Low Memory Globals
         int current_mac_y = ReadMacMemoryShort(0x0828);
         int current_mac_x = ReadMacMemoryShort(0x082A);
 
@@ -162,4 +159,3 @@ void Kindle_CleanUp(void) {
         fbink_close(fbfd);
     }
 }
-
