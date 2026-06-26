@@ -1,0 +1,10 @@
+{
+    "items": [
+        {
+            "name": "Mini vMac",
+            "priority": 1,
+            "action": "launch.sh",
+            "description": "Macintosh Plus Emulator"
+        }
+    ]
+}
