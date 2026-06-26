@@ -31,7 +31,7 @@ static int current_touch_x = 0;
 static int current_touch_y = 0;
 
 // ---------------------------------------------------------
-// FUNCTION PROTOTYPES (Satisfies -Wmissing-prototypes)
+// FUNCTION PROTOTYPES
 // ---------------------------------------------------------
 void Kindle_Init(void);
 void Kindle_UpdateScreenRect(int x, int y, int width, int height);
@@ -60,20 +60,11 @@ char* vSonyGetName(int d);
 void Screen_OutputFrame(void);
 void *ReserveAllocOneBlock(int s);
 
-// HAL Stub Prototypes
-uint8_t* GetMacVRAMPointer(void);
-uint16_t ReadMacMemoryShort(uint32_t address);
-void InjectMacMouseDelta(int dx, int dy);
-void InjectMacMouseButton(bool is_down);
-
-// Mini vMac Core Entry (Discovered via symbol dump!)
+// Mini vMac Core Entry & Video Hook
 extern void ProgramMain(void);
+extern uint8_t* GetCurDrawBuff(void);
 
-// ---------------------------------------------------------
-// TEMPORARY DUMMY HAL (To be mapped to true core variables)
-// ---------------------------------------------------------
-static uint8_t dummy_vram[KINDLE_WIDTH * KINDLE_HEIGHT / 8] = {0};
-uint8_t* GetMacVRAMPointer(void) { return dummy_vram; }
+// Temporary Mouse Stubs (To be wired up next)
 uint16_t ReadMacMemoryShort(uint32_t address) { return 0; }
 void InjectMacMouseDelta(int dx, int dy) {}
 void InjectMacMouseButton(bool is_down) {}
@@ -112,7 +103,10 @@ void Kindle_Init(void) {
 void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
     if (!fb_mem) return;
 
-    uint8_t *mac_vram = GetMacVRAMPointer();
+    // Fetch the real Macintosh Video RAM directly from the core!
+    uint8_t *mac_vram = GetCurDrawBuff();
+    if (!mac_vram) return;
+
     int mac_stride = KINDLE_WIDTH / 8; 
     int fb_stride = KINDLE_WIDTH * KINDLE_BPP; 
 
@@ -246,4 +240,3 @@ int main(int argc, char *argv[]) {
     
     return 0;
 }
-
