@@ -60,11 +60,11 @@ char* vSonyGetName(int d);
 void Screen_OutputFrame(void);
 void *ReserveAllocOneBlock(int s);
 
-// Mini vMac Core Entry & Video Hook
+// Mini vMac Core Entry & Raw Video RAM
 extern void ProgramMain(void);
-extern uint8_t* GetCurDrawBuff(void);
+extern uint8_t *VidMem;
 
-// Temporary Mouse Stubs (To be wired up next)
+// Temporary Mouse Stubs
 uint16_t ReadMacMemoryShort(uint32_t address) { return 0; }
 void InjectMacMouseDelta(int dx, int dy) {}
 void InjectMacMouseButton(bool is_down) {}
@@ -104,7 +104,7 @@ void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
     if (!fb_mem) return;
 
     // Fetch the real Macintosh Video RAM directly from the core!
-    uint8_t *mac_vram = GetCurDrawBuff();
+    uint8_t *mac_vram = VidMem;
     if (!mac_vram) return;
 
     int mac_stride = KINDLE_WIDTH / 8; 
