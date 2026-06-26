@@ -159,3 +159,95 @@ void Kindle_CleanUp(void) {
         fbink_close(fbfd);
     }
 }
+// =========================================================
+// BARE-METAL PLATFORM STUBS
+// Satisfies linker expectations for the core 68k emulator
+// =========================================================
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Core emulator entry point (defined in PROGMAIN.c)
+extern void ProgMain(void);
+
+// 1. Timing and State Variables
+int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, ExtraTimeNotOver = 1, WantNotAutoSlow = 0;
+int DoneWithDrawingForTick = 0, OnTrueTime = 1, EmLagTime = 0;
+unsigned int CurMacDateInSeconds = 0;
+int CurMacLatitude = 0, CurMacLongitude = 0, CurMacDelta = 0;
+int WantMacReset = 0, WantMacInterrupt = 0, ForceMacOff = 0;
+
+// 2. Mouse and Video Variables
+int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
+
+// 3. Sound (Disabled for Bare-Metal)
+void MySound_BeginWrite(void) {}
+void MySound_EndWrite(void) {}
+
+// 4. Event Queue and Timing Loop
+int MyEvtQOutP = 0, MyEvtQOutDone = 0;
+void WaitForNextTick(void) { 
+    usleep(16000);     // Roughly 60Hz timing
+    Kindle_PollInput(); // Inject our evdev touch hack here
+}
+
+// 5. Memory Management
+void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
+char *ROM = NULL;
+
+// 6. Host Clipboard Integration (Disabled)
+void CheckPbuf(void) {} void HTCEexport(void) {} void HTCEimport(void) {}
+void PbufTransfer(void) {} void *PbufNew(int s) { return NULL; }
+void PbufDispose(void *p) {} int PbufGetSize(void *p) { return 0; }
+
+// 7. Sony Floppy Disk Controller (Stubbed to appear empty)
+int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0, AnyDiskInserted = 0;
+int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
+char vSonyNewDiskName[256];
+int vSonyGetSize(int d) { return 0; }
+void WarnMsgUnsupportedDisk(void) {}
+void vSonyEject(int d) {}
+void vSonyTransfer(int d, int op, int track, void *buf) {}
+void DiskRevokeWritable(int d) {}
+void vSonyEjectDelete(int d) {}
+char* vSonyGetName(int d) { return ""; }
+
+// 8. Video Output Hook
+void Screen_OutputFrame(void) { 
+    // Called by the core when the Mac VRAM is dirty
+    Kindle_UpdateScreenRect(0, 0, KINDLE_WIDTH, KINDLE_HEIGHT); 
+}
+
+// =========================================================
+// MAIN ENTRY POINT
+// =========================================================
+int main(int argc, char *argv[]) {
+    // 1. Load the ROM file into memory
+    // (Expects vMac.ROM to be in the same directory as the executable)
+    FILE *f = fopen("vMac.ROM", "rb");
+    if (!f) { 
+        fprintf(stderr, "FATAL: vMac.ROM not found in current directory.\n"); 
+        return 1; 
+    }
+    fseek(f, 0, SEEK_END);
+    long rom_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    
+    ROM = (char*)malloc(rom_size);
+    fread(ROM, 1, rom_size, f);
+    fclose(f);
+
+    // 2. Initialize FBInk and Touch
+    Kindle_Init();
+
+    // 3. Boot the Macintosh Emulator
+    ProgMain(); 
+
+    // 4. Teardown
+    Kindle_CleanUp();
+    if (ROM) free(ROM);
+    
+    return 0;
+}
+
