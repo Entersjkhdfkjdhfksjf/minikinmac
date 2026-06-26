@@ -11,24 +11,21 @@ echo "=> Generating configuration for Linux ARM..."
 chmod +x setup.sh
 ./setup.sh
 
-echo "=> Patching the generated Makefile..."
-sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
-sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
-sed -i 's|-Isrc/|-Isrc/ -I/usr/arm-linux-gnueabihf/include|g' Makefile
-sed -i 's|-I/usr/X11R6/include||g' Makefile
-sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
-sed -i 's|-lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
-sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
-
-echo "=> Cross-compiling the emulator..."
-make
-
 echo "=========================================================="
-echo "=> Dumping Memory Symbols from raw object files:"
+echo "=> DUMPING VIDEO LOGIC FOR REVERSE ENGINEERING:"
 echo "=========================================================="
-# Target the unstripped object files and prevent grep from failing the script
-arm-linux-gnueabihf-nm bld/*.o | grep -i -E "screen|vram|video" || true
-arm-linux-gnueabihf-nm bld/*.o | grep " [BCDGRV] " | grep -i "mac" || true
+echo "1. OSGLUXWN.c (X11 Image Creation)"
+grep -B 2 -A 5 "XCreateImage" src/OSGLUXWN.c || true
+
+echo -e "\n2. OSGLUXWN.c (Screen Update Function)"
+grep -A 15 "Screen_OutputFrame" src/OSGLUXWN.c || true
+
+echo -e "\n3. CNFGRAPI.h (Screen Macros)"
+grep -i -E "screen|vram|macmem" src/CNFGRAPI.h || true
+
+echo -e "\n4. GLOBGLUE.c (Screen Variables)"
+grep -i -E "vMacScreen|MacMem" src/GLOBGLUE.c || true
 echo "=========================================================="
 
-echo "=> Build successful! Binary is ready for deployment."
+echo "=> Diagnostic complete. Intentionally exiting."
+exit 1
