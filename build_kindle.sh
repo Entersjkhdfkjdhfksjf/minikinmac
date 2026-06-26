@@ -12,13 +12,16 @@ chmod +x setup.sh
 ./setup.sh
 
 echo "=========================================================="
-echo "=> DUMPING THE EXACT MACRO DEFINITIONS:"
+echo "=> UNMASKING THE VIDEO POINTER:"
 echo "=========================================================="
-echo "[GetCurDrawBuff]"
-grep -rn "GetCurDrawBuff" src/ || true
+echo "1. Exact source code of GetCurDrawBuff:"
+grep -n -A 5 "LOCALFUNC ui3p GetCurDrawBuff" src/CONTROLM.h || true
 
-echo -e "\n[vMacScreen]"
-grep -rn "vMacScreen" src/ || true
+echo -e "\n2. All globals exported by GLOBGLUE:"
+# Compile just the glue file using the host compiler to peek at its symbols
+gcc "src/GLOBGLUE.c" -o "GLOBGLUE.o" -c -Icfg/ -Isrc/ -Os || true
+nm GLOBGLUE.o | grep -E " [BCDGRV] " || true
 echo "=========================================================="
 
+echo "=> Diagnostic complete. Intentionally exiting."
 exit 1
