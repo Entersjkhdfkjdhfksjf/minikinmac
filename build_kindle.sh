@@ -1,5 +1,6 @@
 #!/bin/bash
 # build_kindle.sh
+# Automates the configuration, patching, and compilation of the Kindle PW3 port.
 
 set -e
 
@@ -11,17 +12,17 @@ echo "=> Generating configuration for Linux ARM..."
 chmod +x setup.sh
 ./setup.sh
 
-echo "=========================================================="
-echo "=> UNMASKING THE VIDEO POINTER:"
-echo "=========================================================="
-echo "1. Exact source code of GetCurDrawBuff:"
-grep -n -A 5 "LOCALFUNC ui3p GetCurDrawBuff" src/CONTROLM.h || true
+echo "=> Patching the generated Makefile..."
+sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
+sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
+sed -i 's|-Isrc/|-Isrc/ -I/usr/arm-linux-gnueabihf/include|g' Makefile
+sed -i 's|-I/usr/X11R6/include||g' Makefile
+sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
+sed -i 's|-lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
+sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
 
-echo -e "\n2. All globals exported by GLOBGLUE:"
-# Compile just the glue file using the host compiler to peek at its symbols
-gcc "src/GLOBGLUE.c" -o "GLOBGLUE.o" -c -Icfg/ -Isrc/ -Os || true
-nm GLOBGLUE.o | grep -E " [BCDGRV] " || true
-echo "=========================================================="
+echo "=> Cross-compiling the emulator..."
+make
 
-echo "=> Diagnostic complete. Intentionally exiting."
-exit 1
+echo "=> Build successful! Binary is ready for deployment."
+
