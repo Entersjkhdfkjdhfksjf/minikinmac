@@ -12,17 +12,14 @@ chmod +x setup.sh
 ./setup.sh
 
 echo "=========================================================="
-echo "=> HOW DOES X11 ASSIGN THE VIDEO BUFFER?"
+echo "=> TRACING THE X11 VRAM ASSIGNMENT:"
 echo "=========================================================="
-# Find exactly where X11 points its image data array
-grep -n -C 2 "\->data" src/OSGLUXWN.c || true
+echo "1. Context around the_data:"
+grep -n -B 20 -A 5 "my_image->data = the_data" src/OSGLUXWN.c || true
 
-echo "=========================================================="
-echo "=> DUMPING ALL UNFILTERED GLOBALS FROM SCRNEMDV.c:"
-echo "=========================================================="
-# Compile just the screen emulator object using the host compiler to peek at its symbols
-gcc -c src/SCRNEMDV.c -o SCRNEMDV.o -Icfg/ -Isrc/ -Os
-nm SCRNEMDV.o | grep " [BD] " || true
+echo -e "\n2. Where is image_Mem1 declared?"
+grep -n -B 2 -A 2 "image_Mem1" src/OSGLUXWN.c || true
 echo "=========================================================="
 
 exit 1
+
