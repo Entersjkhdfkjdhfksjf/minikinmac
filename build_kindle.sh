@@ -24,11 +24,11 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=========================================================="
-echo "=> Dumping Memory Symbols to find the real VRAM array:"
+echo "=> Dumping Memory Symbols from raw object files:"
 echo "=========================================================="
-arm-linux-gnueabihf-nm minivmac | grep -i -E "screen|vram" 
-arm-linux-gnueabihf-nm minivmac | grep " B " | grep -i "mac"
+# Target the unstripped object files and prevent grep from failing the script
+arm-linux-gnueabihf-nm bld/*.o | grep -i -E "screen|vram|video" || true
+arm-linux-gnueabihf-nm bld/*.o | grep " [BCDGRV] " | grep -i "mac" || true
 echo "=========================================================="
 
 echo "=> Build successful! Binary is ready for deployment."
-
