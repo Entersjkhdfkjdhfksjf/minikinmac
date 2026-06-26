@@ -24,7 +24,7 @@ jobs:
           cd FBInk
           
           # Compile statically for the Kindle PW2/PW3 architecture
-          make kindle-pw2
+          make kindle CC=arm-linux-gnueabihf-gcc
           
           # Install headers and static library directly into the ARM cross-compiler's sysroot
           # This ensures 'arm-linux-gnueabihf-gcc' finds them automatically during the build
