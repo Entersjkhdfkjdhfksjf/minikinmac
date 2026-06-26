@@ -67,7 +67,7 @@ void InjectMacMouseDelta(int dx, int dy);
 void InjectMacMouseButton(bool is_down);
 
 // Mini vMac Core Entry
-extern void MainEventLoop(void);
+extern void vMacMain(void);
 
 // ---------------------------------------------------------
 // TEMPORARY DUMMY HAL (To be mapped to true core variables)
@@ -238,8 +238,8 @@ int main(int argc, char *argv[]) {
 
     Kindle_Init();
     
-    // Launch Core Emulator
-    MainEventLoop(); 
+    // Launch Core Emulator (this will trigger the linker failure so we can dump symbols)
+    vMacMain(); 
 
     Kindle_CleanUp();
     if (ROM) free(ROM);
