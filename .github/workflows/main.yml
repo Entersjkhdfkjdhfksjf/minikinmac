@@ -20,16 +20,17 @@ jobs:
 
       - name: Clone and Build FBInk
         run: |
-          git clone https://github.com/NiLuJe/FBInk.git
+          # Added --recurse-submodules to pull in i2c-tools automatically
+          git clone --recurse-submodules https://github.com/NiLuJe/FBInk.git
           cd FBInk
           
-          # Compile statically for the Kindle PW2/PW3 architecture
+          # Compile statically for the Kindle architecture using our cross-compiler
           make kindle CC=arm-linux-gnueabihf-gcc
           
-          # Install headers and static library directly into the ARM cross-compiler's sysroot
-          # This ensures 'arm-linux-gnueabihf-gcc' finds them automatically during the build
-          sudo cp release/libfbink.a /usr/arm-linux-gnueabihf/lib/
+          # Find and copy the built library and header to the compiler's sysroot
+          sudo find . -name "libfbink.a" -exec cp {} /usr/arm-linux-gnueabihf/lib/ \;
           sudo cp fbink.h /usr/arm-linux-gnueabihf/include/
+          
 
       - name: Execute Build Script
         run: |
