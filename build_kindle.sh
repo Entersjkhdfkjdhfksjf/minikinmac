@@ -25,9 +25,10 @@ sed -i 's|-Isrc/|-Isrc/ -I/usr/arm-linux-gnueabihf/include|g' Makefile
 # 4. Strip X11 includes
 sed -i 's|-I/usr/X11R6/include||g' Makefile
 
-# 5. Inject FBInk library and obliterate X11 linker flags
-sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink|g' Makefile
-sed -i 's|-lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink|g' Makefile
+# 5. Inject FBInk library, standard math (-lm), and obliterate X11 linker flags
+sed -i 's|LFLAGS = .*|LFLAGS = -L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
+sed -i 's|LDFLAGS = .*|LDFLAGS = -L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
+
 
 echo "=> Cross-compiling the emulator..."
 make
