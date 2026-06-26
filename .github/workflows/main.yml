@@ -35,8 +35,8 @@ jobs:
           # Make sure the script is executable and run it
 
           #Just some tests
-          echo "=> Dumping Screen/Video memory symbols to find VRAM pointer:"
-          arm-linux-gnueabihf-nm bld/SCRNEMDV.o | grep -E " [BCDGRV] "
+          #echo "=> Dumping Screen/Video memory symbols to find VRAM pointer:"
+          #arm-linux-gnueabihf-nm bld/SCRNEMDV.o | grep -E " [BCDGRV] "
 
           chmod +x ./build_kindle.sh
           ./build_kindle.sh
