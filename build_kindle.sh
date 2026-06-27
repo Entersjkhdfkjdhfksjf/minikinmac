@@ -3,14 +3,15 @@
 
 set -e
 
-# 1. Fetch FBInk using git to ensure we have the repository metadata
-echo "=> Fetching FBInk repository..."
-git clone --depth 1 https://github.com/NiLuJe/FBInk.git /tmp/FBInk-master
+# 1. Fetch FBInk using git with submodules to ensure i2c-tools is present
+echo "=> Fetching FBInk repository (with submodules)..."
+git clone --recurse-submodules https://github.com/NiLuJe/FBInk.git /tmp/FBInk-master
 cd /tmp/FBInk-master
 
-# 2. Compile ONLY the static library for Kindle (skips CLI utils and i2c-tools)
+# 2. Compile ONLY the static library for Kindle (skips CLI utils)
 echo "=> Compiling libfbink.a statically for Kindle..."
-make CC=armv7-unknown-linux-musleabihf-gcc KINDLE=1 staticlib
+# Using CROSS_TC ensures FBInk uses the musl 'gcc', 'ar', and 'ranlib' tools
+make CROSS_TC=armv7-unknown-linux-musleabihf KINDLE=1 staticlib
 
 # Ensure the compiled library is available in the root folder for the linker
 find . -name "libfbink.a" -exec cp {} . \;
@@ -49,4 +50,3 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
-
