@@ -1,13 +1,14 @@
-name: Build Mini vMac for Kindle
+name: Build Mini vMac for Kindle (Koxtoolchain)
 
 on:
   push:
     branches: [ main ]
+  workflow_dispatch: # Enables manual triggering from the GitHub UI!
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    # THE FIX: Run the entire build inside NiLuJe's Kindle 5.4 Toolchain!
+    # We run the build inside NiLuJe's official Kindle 5.4 Toolchain container
     container:
       image: ghcr.io/koreader/koxtoolchain:kindle54
 
