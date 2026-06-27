@@ -29,6 +29,7 @@ static int touch_x_min = 0, touch_x_max = 1448;
 static int touch_y_min = 0, touch_y_max = 1072;
 static int current_touch_x = 0;
 static int current_touch_y = 0;
+static bool mac_has_booted = false;
 
 // ---------------------------------------------------------
 // FUNCTION PROTOTYPES
@@ -101,36 +102,41 @@ void Kindle_Init(void) {
 // 2. VIDEO RENDERING (THE BLITTER)
 // ---------------------------------------------------------
 void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
-    if (!fb_mem) return;
-
-    // Fetch the real Macintosh Video RAM directly from the core!
-    uint8_t *mac_vram = VidMem;
-    if (!mac_vram) return;
+    if (!fb_mem || !VidMem) return;
 
     int mac_stride = KINDLE_WIDTH / 8; 
     int fb_stride = KINDLE_WIDTH * KINDLE_BPP; 
+    bool frame_has_content = false;
 
     for (int row = y; row < y + height; row++) {
         for (int col = x; col < x + width; col++) {
             int byte_idx = (row * mac_stride) + (col / 8);
             int bit_idx = 7 - (col % 8); 
-            uint8_t mac_byte = mac_vram[byte_idx];
-            bool is_black = (mac_byte >> bit_idx) & 1; 
+            uint8_t mac_byte = VidMem[byte_idx];
             
+            // Mac RAM 0x00 is pure white. If it draws anything else, it is booting.
+            if (mac_byte != 0x00) {
+                frame_has_content = true;
+            }
+
+            bool is_black = (mac_byte >> bit_idx) & 1; 
             int fb_idx = (row * fb_stride) + col;
             fb_mem[fb_idx] = is_black ? 0x00 : 0xFF;
         }
     }
 
-    fbink_refresh(fbfd, x, y, width, height, &fb_cfg);
+    // Only force a physical e-ink refresh if the Mac has drawn the desktop or floppy
+    if (frame_has_content) {
+        mac_has_booted = true;
+        fbink_refresh(fbfd, x, y, width, height, &fb_cfg);
+    }
 }
 
 // ---------------------------------------------------------
-// 3. INPUT POLLING (THE DELTA HACK)
+// 3. INPUT POLLING
 // ---------------------------------------------------------
 void Kindle_PollInput(void) {
     if (touch_fd < 0) return;
-
     struct input_event ev;
     bool touch_moved = false;
 
@@ -159,9 +165,6 @@ void Kindle_PollInput(void) {
     }
 }
 
-// ---------------------------------------------------------
-// 4. TEARDOWN
-// ---------------------------------------------------------
 void Kindle_CleanUp(void) {
     if (touch_fd >= 0) close(touch_fd);
     if (fbfd >= 0) {
@@ -183,8 +186,12 @@ int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 void MySound_BeginWrite(void) {}
 void MySound_EndWrite(void) {}
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
+
 void WaitForNextTick(void) { 
-    usleep(16000); 
+    // Warp-speed the CPU until the Mac memory test finishes, then cap to 60 FPS
+    if (mac_has_booted) {
+        usleep(16000); 
+    }
     Kindle_PollInput(); 
 }
 
@@ -196,16 +203,33 @@ void CheckPbuf(void) {} void HTCEexport(void) {} void HTCEimport(void) {}
 void PbufTransfer(void) {} void *PbufNew(int s) { return NULL; }
 void PbufDispose(void *p) {} int PbufGetSize(void *p) { return 0; }
 
+// =========================================================
+// FLOPPY DISK CONTROLLER (Mounted to disk.img)
+// =========================================================
+FILE *mac_disk = NULL;
 int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0, AnyDiskInserted = 0;
 int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
 char vSonyNewDiskName[256];
-int vSonyGetSize(int d) { return 0; }
+
+int vSonyGetSize(int d) { 
+    if (d == 1 && mac_disk) {
+        fseek(mac_disk, 0, SEEK_END);
+        return ftell(mac_disk);
+    }
+    return 0; 
+}
+void vSonyTransfer(int d, int op, int track, void *buf) {
+    if (d == 1 && mac_disk) {
+        fseek(mac_disk, track * 512, SEEK_SET);
+        if (op == 0) fread(buf, 1, 512, mac_disk);
+        else fwrite(buf, 1, 512, mac_disk);
+    }
+}
+void vSonyEject(int d) { if (d == 1) vSonyInsertedMask = 0; }
 void WarnMsgUnsupportedDisk(void) {}
-void vSonyEject(int d) {}
-void vSonyTransfer(int d, int op, int track, void *buf) {}
 void DiskRevokeWritable(int d) {}
 void vSonyEjectDelete(int d) {}
-char* vSonyGetName(int d) { return ""; }
+char* vSonyGetName(int d) { return "disk.img"; }
 
 void Screen_OutputFrame(void) { 
     Kindle_UpdateScreenRect(0, 0, KINDLE_WIDTH, KINDLE_HEIGHT); 
@@ -216,27 +240,27 @@ void Screen_OutputFrame(void) {
 // =========================================================
 int main(int argc, char *argv[]) {
     FILE *f = fopen("vMac.ROM", "rb");
-    if (!f) { 
-        fprintf(stderr, "FATAL: vMac.ROM not found in current directory.\n"); 
-        return 1; 
-    }
+    if (!f) return 1; 
     fseek(f, 0, SEEK_END);
     long rom_size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    
     ROM = (char*)malloc(rom_size);
-    if (fread(ROM, 1, rom_size, f) != (size_t)rom_size) {
-        fprintf(stderr, "Warning: ROM read incomplete.\n");
-    }
+    fread(ROM, 1, rom_size, f);
     fclose(f);
 
-    Kindle_Init();
-    
-    // Launch Core Emulator
-    ProgramMain(); 
+    // Mount the OS Disk if available
+    mac_disk = fopen("disk.img", "r+b");
+    if (mac_disk) {
+        vSonyInsertedMask = 1; 
+        vSonyWritableMask = 1; 
+        AnyDiskInserted = 1;
+    }
 
+    Kindle_Init();
+    ProgramMain(); // Launch Core
     Kindle_CleanUp();
+
     if (ROM) free(ROM);
-    
+    if (mac_disk) fclose(mac_disk);
     return 0;
 }
