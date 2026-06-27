@@ -21,8 +21,8 @@ jobs:
 
     - name: Build Emulator
       run: |
-        chmod +x build_scripts/build_kindle.sh
-        ./build_scripts/build_kindle.sh
+        chmod +x ./build_kindle.sh
+        ./build_kindle.sh
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
