@@ -1,22 +1,19 @@
 #!/bin/sh
-# launch.sh - KUAL execution script
 
-# Dynamically get the directory where this extension is installed
-EXT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cd "${EXT_DIR}"
+cd "$(dirname "$0")"
 
-# Clear the e-ink screen before launching to prevent KUAL UI ghosting
-# (Calling it twice ensures a perfectly clean slate)
-eips -c
-eips -c
-
-# Stop the Kindle framework from interfering with our raw input/output
+# 1. Gracefully stop Kindle UI
 stop lab126_gui
+eips -c
+eips -c
 
-# Launch the emulator
-# We use 'exec' to replace the current shell process with the emulator
-exec ./bin/minivmac
+# 2. Launch the statically linked emulator
+# (Any terminal output/errors will be saved here so we aren't blind)
+./bin/minivmac > bash_crash.log 2>&1
 
-# Note: Once the emulator exits, restart the standard Kindle UI
+# 3. Sync to flash and restore
+sync
+eips -c
 start lab126_gui
+
 
