@@ -1,53 +1,34 @@
 #!/bin/bash
 # build_kindle.sh
-# Automates configuration, Framebuffer API generation, and FBInk thread injection.
 
 set -e
 
-echo "=> Compiling Mini vMac setup tool..."
+echo "=> Compiling setup tool..."
 gcc setup/tool.c -o setup_t
 
-# 1. Pivot to the Native Linux Framebuffer API (-api fb)
-echo "=> Generating configuration for Linux Framebuffer..."
-./setup_t -t larm -api fb -hres 1440 -vres 1056 > setup.sh
+echo "=> Generating standard X11 code to reverse engineer..."
+./setup_t -t larm -hres 1440 -vres 1056 > setup.sh
 chmod +x setup.sh
 ./setup.sh
 
-echo "=> Patching Makefile for cross-compilation..."
+echo "=========================================================="
+echo "=> 1. OFFICIAL BOOT SEQUENCE (From X11 main)"
+echo "=========================================================="
+grep -A 20 "int main(" src/OSGLUXWN.c || true
+
+echo -e "\n=========================================================="
+echo "=> 2. OFFICIAL HAL INTERFACE (Required OS Glue Functions)"
+echo "=========================================================="
 sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
-sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
 
-# Safely append our FBInk and Pthread libraries to the linker command
-sed -i 's/PROGMAIN.o/PROGMAIN.o -L\/usr\/arm-linux-gnueabihf\/lib -lfbink -lm -lpthread -ldl/g' Makefile
+# Compile only the emulator core, skipping the X11 OS Glue
+make bld/MINEM68K.o bld/GLOBGLUE.o bld/M68KITAB.o bld/VIAEMDEV.o bld/IWMEMDEV.o bld/SCCEMDEV.o bld/RTCEMDEV.o bld/ROMEMDEV.o bld/SCSIEMDV.o bld/SONYEMDV.o bld/SCRNEMDV.o bld/MOUSEMDV.o bld/KBRDEMDV.o bld/SNDEMDEV.o bld/PROGMAIN.o > /dev/null 2>&1 || true
 
-echo "=> Injecting FBInk background thread into OSGLULFB.c..."
-# Create a header containing our e-ink refresh thread
-cat << 'EOF' > fbink_thread.h
-#include <pthread.h>
-#include "fbink.h"
-#include <unistd.h>
-static void* eink_refresh_thread(void* arg) {
-    int fbfd = fbink_open();
-    FBInkConfig fb_cfg = {0};
-    fbink_init(fbfd, &fb_cfg);
-    fb_cfg.is_flashing = false;
-    fb_cfg.wfm_mode = WFM_A2;
-    while(1) {
-        // Force the kernel framebuffer to the physical e-ink screen at 20 FPS
-        fbink_refresh(fbfd, 0, 0, 0, 0, &fb_cfg);
-        usleep(50000); 
-    }
-    return NULL;
-}
-EOF
+# Stitch the core together and ask the linker what functions are missing
+arm-linux-gnueabihf-ld -r bld/MINEM68K.o bld/GLOBGLUE.o bld/M68KITAB.o bld/VIAEMDEV.o bld/IWMEMDEV.o bld/SCCEMDEV.o bld/RTCEMDEV.o bld/ROMEMDEV.o bld/SCSIEMDV.o bld/SONYEMDV.o bld/SCRNEMDV.o bld/MOUSEMDV.o bld/KBRDEMDV.o bld/SNDEMDEV.o bld/PROGMAIN.o -o bld/core.o || true
 
-# Inject the thread function at the very top of the generated file
-sed -i '1r fbink_thread.h' src/OSGLULFB.c
+echo "The core emulator requires us to implement these functions:"
+arm-linux-gnueabihf-nm -u bld/core.o | grep -v "__" || true
+echo "=========================================================="
 
-# Inject the thread launch command right as the emulator boots
-sed -i '/int main(/a \    pthread_t thread_id;\n    pthread_create(\&thread_id, NULL, eink_refresh_thread, NULL);' src/OSGLULFB.c
-
-echo "=> Cross-compiling the emulator..."
-make
-
-echo "=> Build successful! Binary is ready for deployment."
+exit 1
