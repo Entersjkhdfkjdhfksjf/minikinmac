@@ -9,6 +9,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
+#include <sys/time.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -25,117 +26,63 @@ static uint8_t *fb_mem = NULL;
 static size_t fb_size = 0;
 static FBInkConfig fb_cfg = {0};
 
-static int touch_x_min = 0, touch_x_max = 1448;
-static int touch_y_min = 0, touch_y_max = 1072;
-static int current_touch_x = 0;
-static int current_touch_y = 0;
-static bool mac_has_booted = false;
-
-// ---------------------------------------------------------
-// FUNCTION PROTOTYPES & CORE EXPORTS
-// ---------------------------------------------------------
-void Kindle_Init(void);
-void Kindle_UpdateScreenRect(int x, int y, int width, int height);
-void Kindle_PollInput(void);
-void Kindle_CleanUp(void);
-
 extern void EmulationReserveAlloc(void);
 extern void ProgramMain(void);
 extern uint8_t *VidMem;
 
+char *ROM = NULL;
+FILE *mac_disk = NULL;
+static bool mac_has_booted = false;
+
 // ---------------------------------------------------------
-// 1. HARDWARE INITIALIZATION
+// 1. HARDWARE BLITTER (UNTHROTTLED)
 // ---------------------------------------------------------
 void Kindle_Init(void) {
     fbfd = fbink_open();
-    if (fbfd < 0) return;
-    
+    if (fbfd < 0) {
+        printf("ERROR: Failed to open fbink!\n");
+        return;
+    }
     fbink_init(fbfd, &fb_cfg);
     fb_cfg.is_flashing = false;
-    fb_cfg.wfm_mode = WFM_A2; 
+    fb_cfg.wfm_mode = WFM_A2; // Fastest 1-bit waveform available
 
     fb_size = KINDLE_WIDTH * KINDLE_HEIGHT * KINDLE_BPP;
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
 
     touch_fd = open("/dev/input/event1", O_RDONLY | O_NONBLOCK);
-    if (touch_fd >= 0) {
-        struct input_absinfo abs_x, abs_y;
-        if (ioctl(touch_fd, EVIOCGABS(ABS_MT_POSITION_X), &abs_x) >= 0) {
-            touch_x_min = abs_x.minimum;
-            touch_x_max = abs_x.maximum;
-        }
-        if (ioctl(touch_fd, EVIOCGABS(ABS_MT_POSITION_Y), &abs_y) >= 0) {
-            touch_y_min = abs_y.minimum;
-            touch_y_max = abs_y.maximum;
-        }
-    }
 }
 
-// ---------------------------------------------------------
-// 2. VIDEO RENDERING (THE BLITTER)
-// ---------------------------------------------------------
 void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
     if (!fb_mem || !VidMem) return;
-
-    int mac_stride = KINDLE_WIDTH / 8; 
-    int fb_stride = KINDLE_WIDTH * KINDLE_BPP; 
+    int mac_stride = KINDLE_WIDTH / 8;
+    int fb_stride = KINDLE_WIDTH * KINDLE_BPP;
     bool frame_has_content = false;
 
     for (int row = y; row < y + height; row++) {
         for (int col = x; col < x + width; col++) {
             int byte_idx = (row * mac_stride) + (col / 8);
-            int bit_idx = 7 - (col % 8); 
+            int bit_idx = 7 - (col % 8);
             uint8_t mac_byte = VidMem[byte_idx];
             
             if (mac_byte != 0x00) frame_has_content = true;
 
-            bool is_black = (mac_byte >> bit_idx) & 1; 
             int fb_idx = (row * fb_stride) + col;
-            fb_mem[fb_idx] = is_black ? 0x00 : 0xFF;
+            fb_mem[fb_idx] = ((mac_byte >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
-
+    
     if (frame_has_content) {
         mac_has_booted = true;
-        fbink_refresh(fbfd, x, y, width, height, &fb_cfg);
+        // THE FIX: Unthrottled. Blasting frames directly to the EPDC!
+        fbink_refresh(fbfd, 0, 0, KINDLE_WIDTH, KINDLE_HEIGHT, &fb_cfg);
     }
 }
-
-// ---------------------------------------------------------
-// 3. INPUT POLLING
-// ---------------------------------------------------------
-uint16_t ReadMacMemoryShort(uint32_t address) { return 0; }
-void InjectMacMouseDelta(int dx, int dy) {}
-void InjectMacMouseButton(bool is_down) {}
 
 void Kindle_PollInput(void) {
     if (touch_fd < 0) return;
     struct input_event ev;
-    bool touch_moved = false;
-
-    while (read(touch_fd, &ev, sizeof(struct input_event)) > 0) {
-        if (ev.type == EV_ABS) {
-            if (ev.code == ABS_MT_POSITION_X) {
-                float scale_x = (float)(ev.value - touch_x_min) / (touch_x_max - touch_x_min);
-                current_touch_x = (int)(scale_x * KINDLE_WIDTH);
-                touch_moved = true;
-            } 
-            else if (ev.code == ABS_MT_POSITION_Y) {
-                float scale_y = (float)(ev.value - touch_y_min) / (touch_y_max - touch_y_min);
-                current_touch_y = (int)(scale_y * KINDLE_HEIGHT);
-                touch_moved = true;
-            }
-        } 
-        else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
-            InjectMacMouseButton(ev.value == 1);
-        }
-    }
-
-    if (touch_moved) {
-        int current_mac_y = ReadMacMemoryShort(0x0828);
-        int current_mac_x = ReadMacMemoryShort(0x082A);
-        InjectMacMouseDelta(current_touch_x - current_mac_x, current_touch_y - current_mac_y);
-    }
+    while (read(touch_fd, &ev, sizeof(struct input_event)) > 0) {}
 }
 
 void Kindle_CleanUp(void) {
@@ -146,137 +93,201 @@ void Kindle_CleanUp(void) {
     }
 }
 
-// =========================================================
-// THE CORE MEMORY ALLOCATOR 
-// =========================================================
-void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) { 
-    int alignment = 1 << align;
-    if (alignment < sizeof(void*)) alignment = sizeof(void*);
-    posix_memalign(p, alignment, s);
-    if (clear && *p) memset(*p, 0, s);
+// ---------------------------------------------------------
+// 2. CORE MEMORY ALLOCATOR
+// ---------------------------------------------------------
+static size_t ReserveAllocOffset = 0;
+static uint8_t *ReserveAllocBigBlock = NULL;
+
+void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) {
+    size_t alignment = 1 << align;
+    size_t remainder = ReserveAllocOffset % alignment;
+    if (remainder != 0) ReserveAllocOffset += (alignment - remainder);
+
+    if (ReserveAllocBigBlock != NULL) {
+        *p = (void*)(ReserveAllocBigBlock + ReserveAllocOffset);
+        if (clear && *p) memset(*p, 0, s);
+    }
+    ReserveAllocOffset += s;
 }
 
-// =========================================================
-// PLATFORM TIMING & STATE VARIABLES
-// =========================================================
+void AllocMacMemory(long rom_size) {
+    ReserveAllocOffset = 0;
+    ReserveAllocBigBlock = NULL;
+    ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
+    EmulationReserveAlloc();
+
+    ReserveAllocBigBlock = (uint8_t*)calloc(1, ReserveAllocOffset);
+    if (!ReserveAllocBigBlock) {
+        printf("FATAL: Failed to allocate Mac Memory!\n");
+        exit(1);
+    }
+
+    ReserveAllocOffset = 0;
+    ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
+    EmulationReserveAlloc();
+}
+
+// ---------------------------------------------------------
+// 3. PLATFORM TIMING & LOGGING
+// ---------------------------------------------------------
+unsigned int TrueEmulatedTime = 0;
+unsigned int OnTrueTime = 1;
+struct timeval last_time;
+static int tick_counter = 0;
+
+void InitTime(void) {
+    gettimeofday(&last_time, NULL);
+    TrueEmulatedTime = 0;
+    OnTrueTime = 0;
+}
+
+void UpdateTime(void) {
+    struct timeval now;
+    gettimeofday(&now, NULL);
+    long elapsed_usec = (now.tv_sec - last_time.tv_sec) * 1000000L + (now.tv_usec - last_time.tv_usec);
+
+    if (elapsed_usec >= 16666) { 
+        TrueEmulatedTime += (elapsed_usec / 16666);
+        last_time.tv_sec = now.tv_sec;
+        last_time.tv_usec = now.tv_usec - (elapsed_usec % 16666);
+    }
+}
+
+int ExtraTimeNotOver(void) {
+    UpdateTime();
+    return (TrueEmulatedTime == OnTrueTime);
+}
+
+void WaitForNextTick(void) {
+    Kindle_PollInput();
+    
+    // Warp speed through the 15-second memory test
+    if (!mac_has_booted) {
+        TrueEmulatedTime++;
+        OnTrueTime = TrueEmulatedTime;
+        return;
+    }
+
+    while (TrueEmulatedTime == OnTrueTime) {
+        usleep(1000); 
+        UpdateTime();
+    }
+    OnTrueTime = TrueEmulatedTime;
+    
+    if (++tick_counter >= 60) {
+        tick_counter = 0;
+        // Force the shell output to write to disk exactly every 1 second
+        fflush(stdout);
+        fflush(stderr);
+    }
+}
+
+// ---------------------------------------------------------
+// 4. CORE STUBS & VARIABLES
+// ---------------------------------------------------------
 int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, WantNotAutoSlow = 0;
-int OnTrueTime = 1, EmLagTime = 0;
-unsigned int CurMacDateInSeconds = 3800000000; // Hardcoded to ~2024 Mac Epoch
+int EmLagTime = 0, ForceMacOff = 0;
+unsigned int CurMacDateInSeconds = 3800000000;
 int CurMacLatitude = 0, CurMacLongitude = 0, CurMacDelta = 0;
-int WantMacReset = 0, WantMacInterrupt = 0, ForceMacOff = 0;
+int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
+void DoneWithDrawingForTick(void) { Kindle_UpdateScreenRect(0, 0, KINDLE_WIDTH, KINDLE_HEIGHT); }
+void Screen_OutputFrame(void) {}
+void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { *actL = 0; return NULL; }
+void MySound_EndWrite(uint32_t actL) {}
+void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
+void CheckPbuf(void) {}
+int HTCEexport(void *i) { return -1; }
+int HTCEimport(void **r) { return -1; }
+void PbufTransfer(void) {}
+void *PbufNew(int s) { return NULL; }
+void PbufDispose(void *p) {}
+int PbufGetSize(void *p) { return 0; }
+
+// ---------------------------------------------------------
+// 5. FLOPPY DISK CONTROLLER
+// ---------------------------------------------------------
 int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0;
 int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
 char vSonyNewDiskName[256];
 
-char *ROM = NULL;
-unsigned int TrueEmulatedTime = 0;
-static int tick_counter = 0;
-
-// Functions that previously segfaulted the CPU
-int ExtraTimeNotOver(void) { return 1; }
-void DoneWithDrawingForTick(void) {}
-void MySound_BeginWrite(void) {}
-void MySound_EndWrite(void) {}
-void Screen_OutputFrame(void) { 
-    Kindle_UpdateScreenRect(0, 0, KINDLE_WIDTH, KINDLE_HEIGHT); 
-}
-
-void WaitForNextTick(void) { 
-    // Warp-speed until Mac desktop draws, then cap to 60 FPS
-    if (mac_has_booted) usleep(16000); 
-    
-    TrueEmulatedTime++;
-    OnTrueTime = TrueEmulatedTime;
-    
-    if (++tick_counter >= 60) {
-        CurMacDateInSeconds++;
-        tick_counter = 0;
-    }
-    Kindle_PollInput(); 
-}
-
-void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
-void CheckPbuf(void) {} 
-void HTCEexport(void) {} 
-void HTCEimport(void) {}
-void PbufTransfer(void) {} 
-void *PbufNew(int s) { return NULL; }
-void PbufDispose(void *p) {} 
-int PbufGetSize(void *p) { return 0; }
-
-// =========================================================
-// FLOPPY DISK CONTROLLER
-// =========================================================
-FILE *mac_disk = NULL;
-
 int AnyDiskInserted(void) { return vSonyInsertedMask != 0; }
 
-int vSonyGetSize(int d) { 
-    if (d == 1 && mac_disk) {
+int vSonyGetSize(int Drive_No, uint32_t *Sony_Count) {
+    if (Drive_No == 1 && mac_disk) {
         fseek(mac_disk, 0, SEEK_END);
-        return ftell(mac_disk);
+        *Sony_Count = (uint32_t)ftell(mac_disk);
+        return 0;
     }
-    return 0; 
+    return -1;
 }
 
-void vSonyTransfer(int d, int op, int track, void *buf) {
-    if (d == 1 && mac_disk) {
-        fseek(mac_disk, track * 512, SEEK_SET);
-        if (op == 0) fread(buf, 1, 512, mac_disk);
-        else fwrite(buf, 1, 512, mac_disk);
+int vSonyTransfer(int IsWrite, uint8_t *Buffer, int Drive_No, uint32_t Sony_Start, uint32_t Sony_Count, uint32_t *Sony_ActCount) {
+    if (Drive_No == 1 && mac_disk) {
+        fseek(mac_disk, Sony_Start, SEEK_SET);
+        uint32_t bytes = 0;
+        if (IsWrite) bytes = fwrite(Buffer, 1, Sony_Count, mac_disk);
+        else bytes = fread(Buffer, 1, Sony_Count, mac_disk);
+        if (Sony_ActCount) *Sony_ActCount = bytes;
+        return 0;
     }
+    return -1;
 }
 
-void vSonyEject(int d) { if (d == 1) vSonyInsertedMask = 0; }
+int vSonyEject(int Drive_No) {
+    if (Drive_No == 1) vSonyInsertedMask = 0;
+    return 0;
+}
+int vSonyEjectDelete(int Drive_No) { return vSonyEject(Drive_No); }
+int vSonyGetName(int Drive_No, void *r) { return -1; }
 void WarnMsgUnsupportedDisk(void) {}
 void DiskRevokeWritable(int d) {}
-void vSonyEjectDelete(int d) {}
-char* vSonyGetName(int d) { return "disk.img"; }
 
-
-// =========================================================
+// ---------------------------------------------------------
 // MAIN ENTRY POINT
-// =========================================================
+// ---------------------------------------------------------
 int main(int argc, char *argv[]) {
-    fprintf(stderr, "Mini vMac for Kindle: Starting up...\n");
+    // Pipe ENTIRE shell output (stdout & stderr) to this file
+    freopen("vmac_debug.log", "w", stdout);
+    freopen("vmac_debug.log", "a", stderr);
+    
+    printf("Mini vMac for Kindle: Starting up...\n");
 
     FILE *f = fopen("vMac.ROM", "rb");
     if (!f) {
-        fprintf(stderr, "FATAL: vMac.ROM not found!\n");
-        return 1; 
+        printf("FATAL: vMac.ROM not found!\n");
+        return 1;
     }
     fseek(f, 0, SEEK_END);
     long rom_size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    
-    // 1. Allocate ROM safely and pass to core
-    ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
+
+    AllocMacMemory(rom_size);
     fread(ROM, 1, rom_size, f);
     fclose(f);
-    fprintf(stderr, "Mini vMac for Kindle: ROM loaded (%ld bytes).\n", rom_size);
+    printf("ROM Loaded. Size: %ld\n", rom_size);
 
     mac_disk = fopen("disk.img", "r+b");
     if (mac_disk) {
-        vSonyInsertedMask = 1; 
-        vSonyWritableMask = 1; 
-        fprintf(stderr, "Mini vMac for Kindle: disk.img mounted.\n");
+        vSonyInsertedMask = 1;
+        vSonyWritableMask = 1;
+        printf("disk.img mounted!\n");
+    } else {
+        printf("disk.img not found, Mac will show flashing question mark.\n");
     }
 
-    // 2. ALLOCATE MAC RAM
-    EmulationReserveAlloc();
-    fprintf(stderr, "Mini vMac for Kindle: Memory allocated.\n");
-
     Kindle_Init();
-    fprintf(stderr, "Mini vMac for Kindle: E-Ink Blitter initialized. Launching 68k loop...\n");
+    InitTime();
     
-    // 3. BOOT MACINTOSH
-    ProgramMain(); 
+    printf("Launching Core 68k Emulator Loop...\n");
+    
+    // Boot Core
+    ProgramMain();
 
     Kindle_CleanUp();
-    if (ROM) free(ROM);
     if (mac_disk) fclose(mac_disk);
     return 0;
 }
