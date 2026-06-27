@@ -1,19 +1,19 @@
 #!/bin/bash
 # build_kindle.sh
-# Generates the X11 project, stubs X11 dependencies, and injects our E-Ink logic.
+# Generates the X11 project, stubs X11 dependencies, injects E-Ink logic, and strips the UI.
 
 set -e
 
 echo "=> Compiling Mini vMac setup tool..."
 gcc setup/tool.c -o setup_t
 
-echo "=> Generating official Linux X11 configuration..."
-./setup_t -t larm -api xwn -hres 1440 -vres 1056 > setup.sh
+echo "=> Generating Minimal Linux X11 configuration (-ui min)..."
+# THE FIX: Added -ui min to completely rip out the Control Mode overlay!
+./setup_t -t larm -api xwn -ui min -hres 1440 -vres 1056 > setup.sh
 chmod +x setup.sh
 ./setup.sh
 
 echo "=> Creating dummy X11 headers to bypass dependencies..."
-# We create a fake X11 environment so the compiler doesn't panic on #include <X11/...>
 mkdir -p X11/extensions
 cat << 'EOF' > X11/Xlib.h
 typedef unsigned long Window;
@@ -29,13 +29,9 @@ typedef struct { int x; } XImage;
 typedef struct { int type; } XEvent;
 #define None 0L
 EOF
-
-# Whack-a-mole prevention: Touch every X11 header vMac might look for
 touch X11/Xutil.h X11/Xos.h X11/keysym.h X11/keysymdef.h X11/cursorfont.h X11/Xatom.h X11/Xresource.h X11/extensions/XShm.h
 
 echo "=> Injecting Kindle E-Ink Hybrid OS Glue..."
-# We completely overwrite the X11 specific file with our e-ink blitter,
-# while keeping all the internal vMac core headers and allocators intact!
 cat << 'EOF' > src/OSGLUXWN.c
 #include "OSGCOMUI.h"
 #include "OSGCOMUD.h"
@@ -82,7 +78,6 @@ LOCALFUNC blnr Screen_Init(void) {
     fb_cfg.is_flashing = false;
     fb_cfg.wfm_mode = WFM_A2;
     
-    // vMacScreenWidth and Height are dynamically provided by the config headers!
     fb_size = vMacScreenWidth * vMacScreenHeight; 
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
     
@@ -109,8 +104,6 @@ LOCALPROC HaveChangedScreenBuff(ui4r top, ui4r left, ui4r bottom, ui4r right) {
             fb_mem[fb_idx] = is_black ? 0x00 : 0xFF;
         }
     }
-    
-    // Send optimized bounding-box refresh to the e-ink screen
     fbink_refresh(fbfd, left, top, right - left, bottom - top, &fb_cfg);
 }
 
@@ -126,7 +119,7 @@ GLOBALOSGLUPROC DoneWithDrawingForTick(void) {
 }
 
 // ---------------------------------------------------------
-// OFFICIAL 2-PASS MEMORY ALLOCATOR
+// MEMORY ALLOCATOR
 // ---------------------------------------------------------
 LOCALPROC ReserveAllocAll(void) {
     ReserveAllocOneBlock(&ROM, kROM_Size, 5, falseblnr);
@@ -254,8 +247,12 @@ GLOBALOSGLUFUNC tMacErr vSonyEjectDelete(tDrive Drive_No) { return mnvm_noErr; }
 GLOBALOSGLUFUNC tMacErr vSonyGetName(tDrive Drive_No, tPbuf *r) { return mnvm_miscErr; }
 
 // ---------------------------------------------------------
-// ROM LOADER
+// ROM LOADER & MINIMAL UI OVERRIDES
 // ---------------------------------------------------------
+GLOBALOSGLUFUNC blnr WaitTillWantRun(void) { return trueblnr; }
+GLOBALOSGLUPROC SysMsgDisplayWait(char *s) { fprintf(stderr, "%s\n", s); }
+GLOBALOSGLUPROC MacMsgDisplayWait(char *s) { fprintf(stderr, "%s\n", s); }
+
 LOCALFUNC blnr LoadMacRom(void) {
     FILE *ROM_File = fopen("vMac.ROM", "rb");
     if (ROM_File) {
@@ -300,7 +297,7 @@ label_retry:
     CheckForSystemEvents();
     if (ForceMacOff) return;
     if (ExtraTimeNotOver()) {
-        usleep(1000); // Wait 1ms, then yield back to Core to execute instructions
+        usleep(1000); 
         goto label_retry;
     }
     CheckDateTime();
@@ -359,10 +356,7 @@ echo "=> Patching Makefile to drop X11 dependencies and link FBInk..."
 sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
 sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
 
-# Tell the compiler to look in our local directory for the dummy X11 folder we just created!
 sed -i 's|-Icfg/|-Icfg/ -I./ |g' Makefile
-
-# Rip out X11 linker flags and replace them with fbink
 sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm|g' Makefile
 sed -i 's|-lXext||g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
@@ -371,4 +365,3 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
-
