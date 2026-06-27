@@ -1,62 +1,27 @@
-name: Build Mini vMac for Kindle PW3
+name: Build Mini vMac for Kindle
 
 on:
   push:
-    branches: [ "main" ]
-  workflow_dispatch: # Allows you to trigger the build manually from the Actions tab
+    branches: [ main ]
 
 jobs:
-  build-kual-extension:
+  build:
     runs-on: ubuntu-latest
+    # THE FIX: Run the entire build inside NiLuJe's Kindle 5.4 Toolchain!
+    container:
+      image: ghcr.io/koreader/koxtoolchain:kindle54
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
+    - uses: actions/checkout@v3
 
-      - name: Install ARM Cross-Compiler
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf
+    - name: Build Emulator
+      run: |
+        chmod +x build_scripts/build_kindle.sh
+        ./build_scripts/build_kindle.sh
 
-      - name: Clone and Build FBInk
-        run: |
-          git clone --recurse-submodules https://github.com/NiLuJe/FBInk.git
-          cd FBInk
-          
-          # Pass the full suite of ARM cross-compilation tools to the Makefile
-          make kindle CC=arm-linux-gnueabihf-gcc STRIP=arm-linux-gnueabihf-strip AR=arm-linux-gnueabihf-ar
-          
-          # Find and copy the built library and header to the compiler's sysroot
-          sudo find . -name "libfbink.a" -exec cp {} /usr/arm-linux-gnueabihf/lib/ \;
-          sudo cp fbink.h /usr/arm-linux-gnueabihf/include/
-          
-      - name: Execute Build Script
-        run: |
-          # Make sure the script is executable and run it
-
-          #Just some tests
-          #echo "=> Dumping Screen/Video memory symbols to find VRAM pointer:"
-          #arm-linux-gnueabihf-nm bld/SCRNEMDV.o | grep -E " [BCDGRV] "
-
-          chmod +x ./build_kindle.sh
-          ./build_kindle.sh
-
-      - name: Prepare KUAL Extension Package (UC)
-        run: |
-          # The kual_ext/ folder should already contain your menu.json and launch.sh
-          # We just need to create the working directories and move the compiled binary
-          
-          mkdir -p kual_ext/bin kual_ext/disks kual_ext/roms
-          
-          # Move the compiled emulator into the bin folder
-          mv minivmac kual_ext/bin/
-          
-          # Ensure the launcher script has execution rights
-          chmod +x kual_ext/launch.sh
-
-      - name: Upload KUAL Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: minivmac-kindle-pw3
-          path: kual_ext/
-          
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: minivmac-kindle
+        path: bld/minivmac
+        
