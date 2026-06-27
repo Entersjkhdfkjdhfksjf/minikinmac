@@ -39,8 +39,10 @@ void Kindle_UpdateScreenRect(int x, int y, int width, int height);
 void Kindle_PollInput(void);
 void Kindle_CleanUp(void);
 
-extern void ProgramMain(void);
 extern void EmulationReserveAlloc(void);
+extern int ROM_IsValid(void);
+extern int WaitForRom(void);
+extern void ProgramMain(void);
 extern uint8_t *VidMem;
 
 // ---------------------------------------------------------
@@ -147,39 +149,50 @@ void Kindle_CleanUp(void) {
 }
 
 // =========================================================
-// THE CORE MEMORY ALLOCATOR (The missing link!)
+// THE CORE MEMORY ALLOCATOR 
 // =========================================================
 void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) { 
-    *p = malloc(s); 
+    int alignment = 1 << align;
+    if (alignment < sizeof(void*)) alignment = sizeof(void*);
+    posix_memalign(p, alignment, s);
     if (clear && *p) memset(*p, 0, s);
 }
 
 // =========================================================
 // PLATFORM TIMING & STATE VARIABLES
 // =========================================================
-int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, ExtraTimeNotOver = 1, WantNotAutoSlow = 0;
-int DoneWithDrawingForTick = 0, OnTrueTime = 1, EmLagTime = 0;
-unsigned int CurMacDateInSeconds = 3800000000; // Hardcoded to 2024ish Mac Epoch
+int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, WantNotAutoSlow = 0;
+int OnTrueTime = 1, EmLagTime = 0;
+unsigned int CurMacDateInSeconds = 3800000000; 
 int CurMacLatitude = 0, CurMacLongitude = 0, CurMacDelta = 0;
 int WantMacReset = 0, WantMacInterrupt = 0, ForceMacOff = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
+int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
+int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0;
+int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
+char vSonyNewDiskName[256];
+
+char *ROM = NULL;
 unsigned int TrueEmulatedTime = 0;
 static int tick_counter = 0;
 
+// The functions that were previously causing silent segfaults!
+int ExtraTimeNotOver(void) { return 1; }
+void DoneWithDrawingForTick(void) {}
 void MySound_BeginWrite(void) {}
 void MySound_EndWrite(void) {}
-int MyEvtQOutP = 0, MyEvtQOutDone = 0;
+void Screen_OutputFrame(void) { 
+    Kindle_UpdateScreenRect(0, 0, KINDLE_WIDTH, KINDLE_HEIGHT); 
+}
 
 void WaitForNextTick(void) { 
     // Warp-speed until Mac desktop draws, then cap to 60 FPS
     if (mac_has_booted) usleep(16000); 
     
-    // Pump the CPU instruction timer
     TrueEmulatedTime++;
     OnTrueTime = TrueEmulatedTime;
     
-    // Pump the Macintosh RTC Clock
     if (++tick_counter >= 60) {
         CurMacDateInSeconds++;
         tick_counter = 0;
@@ -188,18 +201,18 @@ void WaitForNextTick(void) {
 }
 
 void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
-char *ROM = NULL;
-void CheckPbuf(void) {} void HTCEexport(void) {} void HTCEimport(void) {}
-void PbufTransfer(void) {} void *PbufNew(int s) { return NULL; }
-void PbufDispose(void *p) {} int PbufGetSize(void *p) { return 0; }
+void CheckPbuf(void) {} 
+void HTCEexport(void) {} 
+void HTCEimport(void) {}
+void PbufTransfer(void) {} 
+void *PbufNew(int s) { return NULL; }
+void PbufDispose(void *p) {} 
+int PbufGetSize(void *p) { return 0; }
 
 // =========================================================
 // FLOPPY DISK CONTROLLER
 // =========================================================
 FILE *mac_disk = NULL;
-int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0;
-int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
-char vSonyNewDiskName[256];
 
 int AnyDiskInserted(void) { return vSonyInsertedMask != 0; }
 
@@ -225,38 +238,51 @@ void DiskRevokeWritable(int d) {}
 void vSonyEjectDelete(int d) {}
 char* vSonyGetName(int d) { return "disk.img"; }
 
-void Screen_OutputFrame(void) { 
-    Kindle_UpdateScreenRect(0, 0, KINDLE_WIDTH, KINDLE_HEIGHT); 
-}
 
 // =========================================================
 // MAIN ENTRY POINT
 // =========================================================
 int main(int argc, char *argv[]) {
+    fprintf(stderr, "Mini vMac for Kindle: Starting up...\n");
+
     FILE *f = fopen("vMac.ROM", "rb");
-    if (!f) return 1; 
+    if (!f) {
+        fprintf(stderr, "FATAL: vMac.ROM not found!\n");
+        return 1; 
+    }
     fseek(f, 0, SEEK_END);
     long rom_size = ftell(f);
     fseek(f, 0, SEEK_SET);
     
-    // 1. Allocate ROM memory
-    ROM = (char*)malloc(rom_size);
+    // 1. Allocate ROM safely and pass to core
+    ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
     fread(ROM, 1, rom_size, f);
     fclose(f);
+    fprintf(stderr, "Mini vMac for Kindle: ROM loaded (%ld bytes).\n", rom_size);
 
-    // 2. TELL THE EMULATOR CORE TO ALLOCATE ITS RAM AND VRAM!
-    EmulationReserveAlloc();
-
-    // 3. Mount the OS Disk if available
     mac_disk = fopen("disk.img", "r+b");
     if (mac_disk) {
         vSonyInsertedMask = 1; 
         vSonyWritableMask = 1; 
+        fprintf(stderr, "Mini vMac for Kindle: disk.img mounted.\n");
+    }
+
+    // 2. ALLOCATE MAC RAM
+    EmulationReserveAlloc();
+    fprintf(stderr, "Mini vMac for Kindle: Memory allocated.\n");
+
+    // 3. VERIFY ROM & INITIALIZE CPU
+    if (ROM_IsValid() != 0) {
+        fprintf(stderr, "WARNING: ROM_IsValid failed! Emulation may crash.\n");
+    }
+    if (WaitForRom() == 0) {
+        fprintf(stderr, "WARNING: WaitForRom failed! CPU may not tick.\n");
     }
 
     Kindle_Init();
+    fprintf(stderr, "Mini vMac for Kindle: E-Ink Blitter initialized. Launching 68k loop...\n");
     
-    // 4. Boot Macintosh
+    // 4. BOOT MACINTOSH
     ProgramMain(); 
 
     Kindle_CleanUp();
