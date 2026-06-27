@@ -3,22 +3,22 @@ name: Build Mini vMac for Kindle (Musl Static)
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: # The manual trigger button
+  workflow_dispatch: 
 
 jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      # Reliable public musl container matching your llama.cpp architecture
-      image: messense/rust-musl-cross:armv7-unknown-linux-musleabihf
+      # THE FIX: The correct Docker Hub tag
+      image: messense/rust-musl-cross:armv7-musleabihf
 
     steps:
     - uses: actions/checkout@v4
 
     - name: Install build dependencies
       run: |
-        apt-get update
-        apt-get install -y make curl gcc
+        apt-get update || true
+        apt-get install -y make curl gcc || true
 
     - name: Build Emulator
       run: |
