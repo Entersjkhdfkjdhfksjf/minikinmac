@@ -1,23 +1,29 @@
-name: Build Mini vMac for Kindle (Koxtoolchain)
+name: Build Mini vMac for Kindle (Musl Static)
 
 on:
   push:
     branches: [ main ]
-  workflow_dispatch: 
+  workflow_dispatch: # The manual trigger button
 
 jobs:
   build:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/koreader/koxtoolchain:kindle54
+      # Reliable public musl container matching your llama.cpp architecture
+      image: messense/rust-musl-cross:armv7-unknown-linux-musleabihf
 
     steps:
     - uses: actions/checkout@v4
 
+    - name: Install build dependencies
+      run: |
+        apt-get update
+        apt-get install -y make curl gcc
+
     - name: Build Emulator
       run: |
-        chmod +x build_scripts/build_kindle.sh
-        ./build_scripts/build_kindle.sh
+        chmod +x ./build_kindle.sh
+        ./build_kindle.sh
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
