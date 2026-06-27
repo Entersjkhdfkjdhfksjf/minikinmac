@@ -3,26 +3,30 @@
 
 set -e
 
-# 1. Fetch and compile FBInk from source using the musl cross-compiler
-echo "=> Fetching FBInk source code..."
-curl -L https://github.com/NiLuJe/FBInk/archive/refs/heads/master.tar.gz | tar xz -C /tmp
+# 1. Fetch FBInk using git to ensure we have the repository metadata
+echo "=> Fetching FBInk repository..."
+git clone --depth 1 https://github.com/NiLuJe/FBInk.git /tmp/FBInk-master
 cd /tmp/FBInk-master
 
-echo "=> Compiling libfbink.a statically..."
-make CC=armv7-unknown-linux-musleabihf-gcc static
+# 2. Compile ONLY the static library for Kindle (skips CLI utils and i2c-tools)
+echo "=> Compiling libfbink.a statically for Kindle..."
+make CC=armv7-unknown-linux-musleabihf-gcc KINDLE=1 staticlib
+
+# Ensure the compiled library is available in the root folder for the linker
+find . -name "libfbink.a" -exec cp {} . \;
 cd -
 
-# 2. Build the Mini vMac setup tool using the native Ubuntu host compiler
+# 3. Build the Mini vMac setup tool
 echo "=> Compiling Mini vMac setup tool (host compiler)..."
 gcc setup/tool.c -o setup_t
 
-# 3. Generate configuration
+# 4. Generate configuration
 echo "=> Generating core configuration..."
 ./setup_t -t larm -hres 1440 -vres 1056 > setup.sh
 chmod +x setup.sh
 ./setup.sh
 
-# 4. Patch the Makefile
+# 5. Patch the Makefile
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
@@ -40,8 +44,9 @@ sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm|g' Makefile
 # Ensure we use the musl strip tool
 sed -i 's/strip --strip-unneeded/armv7-unknown-linux-musleabihf-strip --strip-unneeded/g' Makefile
 
-# 5. Cross-compile
+# 6. Cross-compile
 echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
+
