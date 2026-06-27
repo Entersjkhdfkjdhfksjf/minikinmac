@@ -40,8 +40,6 @@ void Kindle_PollInput(void);
 void Kindle_CleanUp(void);
 
 extern void EmulationReserveAlloc(void);
-extern int ROM_IsValid(void);
-extern int WaitForRom(void);
 extern void ProgramMain(void);
 extern uint8_t *VidMem;
 
@@ -163,7 +161,7 @@ void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) {
 // =========================================================
 int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, WantNotAutoSlow = 0;
 int OnTrueTime = 1, EmLagTime = 0;
-unsigned int CurMacDateInSeconds = 3800000000; 
+unsigned int CurMacDateInSeconds = 3800000000; // Hardcoded to ~2024 Mac Epoch
 int CurMacLatitude = 0, CurMacLongitude = 0, CurMacDelta = 0;
 int WantMacReset = 0, WantMacInterrupt = 0, ForceMacOff = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
@@ -177,7 +175,7 @@ char *ROM = NULL;
 unsigned int TrueEmulatedTime = 0;
 static int tick_counter = 0;
 
-// The functions that were previously causing silent segfaults!
+// Functions that previously segfaulted the CPU
 int ExtraTimeNotOver(void) { return 1; }
 void DoneWithDrawingForTick(void) {}
 void MySound_BeginWrite(void) {}
@@ -271,18 +269,10 @@ int main(int argc, char *argv[]) {
     EmulationReserveAlloc();
     fprintf(stderr, "Mini vMac for Kindle: Memory allocated.\n");
 
-    // 3. VERIFY ROM & INITIALIZE CPU
-    if (ROM_IsValid() != 0) {
-        fprintf(stderr, "WARNING: ROM_IsValid failed! Emulation may crash.\n");
-    }
-    if (WaitForRom() == 0) {
-        fprintf(stderr, "WARNING: WaitForRom failed! CPU may not tick.\n");
-    }
-
     Kindle_Init();
     fprintf(stderr, "Mini vMac for Kindle: E-Ink Blitter initialized. Launching 68k loop...\n");
     
-    // 4. BOOT MACINTOSH
+    // 3. BOOT MACINTOSH
     ProgramMain(); 
 
     Kindle_CleanUp();
