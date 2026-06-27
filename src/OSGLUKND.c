@@ -16,9 +16,15 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define KINDLE_WIDTH  1440
-#define KINDLE_HEIGHT 1056
-#define KINDLE_BPP    1
+// The physical hardware specs from the FBInk logs
+#define TRUE_KINDLE_WIDTH  1072
+#define TRUE_KINDLE_HEIGHT 1448
+#define TRUE_KINDLE_STRIDE 1088
+
+// The logical Mac OS specs
+#define MAC_WIDTH  1440
+#define MAC_HEIGHT 1056
+#define KINDLE_BPP 1
 
 static int fbfd = -1;
 static int touch_fd = -1;
@@ -47,7 +53,8 @@ void Kindle_Init(void) {
     fb_cfg.is_flashing = false;
     fb_cfg.wfm_mode = WFM_A2; // Fastest 1-bit waveform available
 
-    fb_size = KINDLE_WIDTH * KINDLE_HEIGHT * KINDLE_BPP;
+    // Map the true physical hardware footprint (1088 * 1448 = 1,575,424 bytes)
+    fb_size = TRUE_KINDLE_HEIGHT * TRUE_KINDLE_STRIDE;
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
 
     touch_fd = open("/dev/input/event1", O_RDONLY | O_NONBLOCK);
@@ -55,27 +62,36 @@ void Kindle_Init(void) {
 
 void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
     if (!fb_mem || !VidMem) return;
-    int mac_stride = KINDLE_WIDTH / 8;
-    int fb_stride = KINDLE_WIDTH * KINDLE_BPP;
+    
+    // 1-bit Mac OS memory layout (1440 pixels / 8 bits = 180 bytes per row)
+    int mac_stride = MAC_WIDTH / 8; 
     bool frame_has_content = false;
 
+    // Loop through logical Mac coordinates, but write to rotated physical coordinates
     for (int row = y; row < y + height; row++) {
         for (int col = x; col < x + width; col++) {
+            
+            // Extract the 1-bit pixel from the Mac's VidMem
             int byte_idx = (row * mac_stride) + (col / 8);
             int bit_idx = 7 - (col % 8);
             uint8_t mac_byte = VidMem[byte_idx];
             
             if (mac_byte != 0x00) frame_has_content = true;
 
-            int fb_idx = (row * fb_stride) + col;
+            // 90-degree Counter-Clockwise Rotation
+            int k_x = row;
+            int k_y = MAC_WIDTH - 1 - col;
+            
+            // Blast to the correct physical memory address using the strict 1088 stride
+            int fb_idx = (k_y * TRUE_KINDLE_STRIDE) + k_x;
             fb_mem[fb_idx] = ((mac_byte >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
     
     if (frame_has_content) {
         mac_has_booted = true;
-        // THE FIX: Unthrottled. Blasting frames directly to the EPDC!
-        fbink_refresh(fbfd, 0, 0, KINDLE_WIDTH, KINDLE_HEIGHT, &fb_cfg);
+        // Tell FBInk to refresh the true physical dimensions
+        fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
     }
 }
 
@@ -194,7 +210,7 @@ int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
-void DoneWithDrawingForTick(void) { Kindle_UpdateScreenRect(0, 0, KINDLE_WIDTH, KINDLE_HEIGHT); }
+void DoneWithDrawingForTick(void) { Kindle_UpdateScreenRect(0, 0, MAC_WIDTH, MAC_HEIGHT); }
 void Screen_OutputFrame(void) {}
 void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { *actL = 0; return NULL; }
 void MySound_EndWrite(uint32_t actL) {}
