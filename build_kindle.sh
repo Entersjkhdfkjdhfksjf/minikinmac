@@ -13,7 +13,7 @@ chmod +x setup.sh
 ./setup.sh
 
 echo "=> Creating dummy X11 headers to bypass dependencies..."
-# We create a fake X11 environment so the compiler doesn't panic on #include <X11/Xlib.h>
+# We create a fake X11 environment so the compiler doesn't panic on #include <X11/...>
 mkdir -p X11/extensions
 cat << 'EOF' > X11/Xlib.h
 typedef unsigned long Window;
@@ -29,7 +29,9 @@ typedef struct { int x; } XImage;
 typedef struct { int type; } XEvent;
 #define None 0L
 EOF
-touch X11/Xutil.h X11/Xos.h X11/keysym.h X11/cursorfont.h X11/extensions/XShm.h
+
+# Whack-a-mole prevention: Touch every X11 header vMac might look for
+touch X11/Xutil.h X11/Xos.h X11/keysym.h X11/keysymdef.h X11/cursorfont.h X11/Xatom.h X11/Xresource.h X11/extensions/XShm.h
 
 echo "=> Injecting Kindle E-Ink Hybrid OS Glue..."
 # We completely overwrite the X11 specific file with our e-ink blitter,
@@ -369,3 +371,4 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
+
