@@ -11,16 +11,23 @@ echo "=> Generating core configuration..."
 chmod +x setup.sh
 ./setup.sh
 
-echo "=> Patching Makefile to use our bare-metal E-Ink glue..."
+echo "=> Patching Makefile with exact Cortex-A9 Static Hardware Flags..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
-sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
+
+# INJECT YOUR LLAMA.CPP FLAGS AND FORCE FULLY STATIC LINKING
+sed -i 's/gcc /arm-linux-gnueabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static /g' Makefile
+
 sed -i 's|-Isrc/|-Isrc/ -I/usr/arm-linux-gnueabihf/include|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
+
+# Link FBInk statically alongside the static C library
 sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
 sed -i 's|-lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm -ldl|g' Makefile
+
 sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
 
 echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
+
