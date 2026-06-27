@@ -1,6 +1,6 @@
 #!/bin/bash
 # build_kindle.sh
-# Generates the X11 project and injects our custom E-Ink logic directly into the OS Glue.
+# Generates the X11 project, stubs X11 dependencies, and injects our E-Ink logic.
 
 set -e
 
@@ -11,6 +11,25 @@ echo "=> Generating official Linux X11 configuration..."
 ./setup_t -t larm -api xwn -hres 1440 -vres 1056 > setup.sh
 chmod +x setup.sh
 ./setup.sh
+
+echo "=> Creating dummy X11 headers to bypass dependencies..."
+# We create a fake X11 environment so the compiler doesn't panic on #include <X11/Xlib.h>
+mkdir -p X11/extensions
+cat << 'EOF' > X11/Xlib.h
+typedef unsigned long Window;
+typedef unsigned long Pixmap;
+typedef unsigned long Cursor;
+typedef unsigned long Atom;
+typedef unsigned long Time;
+typedef unsigned long Colormap;
+typedef void Display;
+typedef void GC;
+typedef void Visual;
+typedef struct { int x; } XImage;
+typedef struct { int type; } XEvent;
+#define None 0L
+EOF
+touch X11/Xutil.h X11/Xos.h X11/keysym.h X11/cursorfont.h X11/extensions/XShm.h
 
 echo "=> Injecting Kindle E-Ink Hybrid OS Glue..."
 # We completely overwrite the X11 specific file with our e-ink blitter,
@@ -35,6 +54,7 @@ cat << 'EOF' > src/OSGLUXWN.c
 #include <sys/ioctl.h>
 #include <sys/time.h>
 #include <stdio.h>
+#include <stdbool.h>
 
 // ---------------------------------------------------------
 // KINDLE HARDWARE GLOBALS
@@ -244,7 +264,6 @@ LOCALFUNC blnr LoadMacRom(void) {
         }
         fclose(ROM_File);
     }
-    fprintf(stderr, "FATAL: vMac.ROM not found or invalid size!\n");
     return falseblnr;
 }
 
@@ -254,7 +273,7 @@ LOCALFUNC blnr LoadMacRom(void) {
 LOCALPROC CheckForSystemEvents(void) {
     if (touch_fd < 0) return;
     struct input_event ev;
-    bool touch_moved = falseblnr;
+    blnr touch_moved = falseblnr;
     
     while (read(touch_fd, &ev, sizeof(struct input_event)) > 0) {
         if (ev.type == EV_ABS) {
@@ -268,7 +287,7 @@ LOCALPROC CheckForSystemEvents(void) {
                 touch_moved = trueblnr;
             }
         } else if (ev.type == EV_KEY && ev.code == BTN_TOUCH) {
-            MyMouseButtonSet(ev.value == 1); // Passes click directly to Mac OS!
+            MyMouseButtonSet(ev.value == 1);
         }
     }
     if (touch_moved) MyMousePositionSet(current_touch_x, current_touch_y);
@@ -279,7 +298,7 @@ label_retry:
     CheckForSystemEvents();
     if (ForceMacOff) return;
     if (ExtraTimeNotOver()) {
-        usleep(1000); // Wait 1ms, then check time again
+        usleep(1000); // Wait 1ms, then yield back to Core to execute instructions
         goto label_retry;
     }
     CheckDateTime();
@@ -338,6 +357,9 @@ echo "=> Patching Makefile to drop X11 dependencies and link FBInk..."
 sed -i 's/gcc /arm-linux-gnueabihf-gcc /g' Makefile
 sed -i 's/strip --strip-unneeded/arm-linux-gnueabihf-strip --strip-unneeded/g' Makefile
 
+# Tell the compiler to look in our local directory for the dummy X11 folder we just created!
+sed -i 's|-Icfg/|-Icfg/ -I./ |g' Makefile
+
 # Rip out X11 linker flags and replace them with fbink
 sed -i 's|-L/usr/X11R6/lib -lX11|-L/usr/arm-linux-gnueabihf/lib -lfbink -lm|g' Makefile
 sed -i 's|-lXext||g' Makefile
@@ -347,5 +369,3 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
-
-
