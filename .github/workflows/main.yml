@@ -28,5 +28,6 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: minivmac-kindle
-        path: bld/minivmac
+        # THE FIX: The executable is in the root directory, not the bld/ directory!
+        path: minivmac
         
