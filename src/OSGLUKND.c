@@ -16,12 +16,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-// The physical hardware specs from the FBInk logs
 #define TRUE_KINDLE_WIDTH  1072
 #define TRUE_KINDLE_HEIGHT 1448
 #define TRUE_KINDLE_STRIDE 1088
 
-// The logical Mac OS specs
 #define MAC_WIDTH  1440
 #define MAC_HEIGHT 1056
 #define KINDLE_BPP 1
@@ -39,9 +37,10 @@ extern uint8_t *VidMem;
 char *ROM = NULL;
 FILE *mac_disk = NULL;
 static bool mac_has_booted = false;
+static int frame_skip_counter = 0;
 
 // ---------------------------------------------------------
-// 1. HARDWARE BLITTER (UNTHROTTLED)
+// 1. HARDWARE BLITTER (WITH 15 FPS DECIMATOR)
 // ---------------------------------------------------------
 void Kindle_Init(void) {
     fbfd = fbink_open();
@@ -51,9 +50,8 @@ void Kindle_Init(void) {
     }
     fbink_init(fbfd, &fb_cfg);
     fb_cfg.is_flashing = false;
-    fb_cfg.wfm_mode = WFM_A2; // Fastest 1-bit waveform available
+    fb_cfg.wfm_mode = WFM_A2; // Fast 1-bit waveform
 
-    // Map the true physical hardware footprint (1088 * 1448 = 1,575,424 bytes)
     fb_size = TRUE_KINDLE_HEIGHT * TRUE_KINDLE_STRIDE;
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
 
@@ -63,35 +61,38 @@ void Kindle_Init(void) {
 void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
     if (!fb_mem || !VidMem) return;
     
-    // 1-bit Mac OS memory layout (1440 pixels / 8 bits = 180 bytes per row)
     int mac_stride = MAC_WIDTH / 8; 
     bool frame_has_content = false;
 
-    // Loop through logical Mac coordinates, but write to rotated physical coordinates
+    // Rotate and map to 1088 Stride (Memory-Safe)
     for (int row = y; row < y + height; row++) {
         for (int col = x; col < x + width; col++) {
             
-            // Extract the 1-bit pixel from the Mac's VidMem
             int byte_idx = (row * mac_stride) + (col / 8);
             int bit_idx = 7 - (col % 8);
             uint8_t mac_byte = VidMem[byte_idx];
             
             if (mac_byte != 0x00) frame_has_content = true;
 
-            // 90-degree Counter-Clockwise Rotation
             int k_x = row;
             int k_y = MAC_WIDTH - 1 - col;
-            
-            // Blast to the correct physical memory address using the strict 1088 stride
             int fb_idx = (k_y * TRUE_KINDLE_STRIDE) + k_x;
+            
             fb_mem[fb_idx] = ((mac_byte >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
     
     if (frame_has_content) {
         mac_has_booted = true;
-        // Tell FBInk to refresh the true physical dimensions
-        fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
+    }
+
+    // THE FIX: Decimate the updates! Only trigger the hardware once every 4 frames (15 FPS)
+    if (mac_has_booted) {
+        frame_skip_counter++;
+        if (frame_skip_counter >= 4) {
+            fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
+            frame_skip_counter = 0;
+        }
     }
 }
 
@@ -134,10 +135,7 @@ void AllocMacMemory(long rom_size) {
     EmulationReserveAlloc();
 
     ReserveAllocBigBlock = (uint8_t*)calloc(1, ReserveAllocOffset);
-    if (!ReserveAllocBigBlock) {
-        printf("FATAL: Failed to allocate Mac Memory!\n");
-        exit(1);
-    }
+    if (!ReserveAllocBigBlock) exit(1);
 
     ReserveAllocOffset = 0;
     ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
@@ -150,7 +148,6 @@ void AllocMacMemory(long rom_size) {
 unsigned int TrueEmulatedTime = 0;
 unsigned int OnTrueTime = 1;
 struct timeval last_time;
-static int tick_counter = 0;
 
 void InitTime(void) {
     gettimeofday(&last_time, NULL);
@@ -178,7 +175,7 @@ int ExtraTimeNotOver(void) {
 void WaitForNextTick(void) {
     Kindle_PollInput();
     
-    // Warp speed through the 15-second memory test
+    // Warp speed through RAM test
     if (!mac_has_booted) {
         TrueEmulatedTime++;
         OnTrueTime = TrueEmulatedTime;
@@ -190,13 +187,6 @@ void WaitForNextTick(void) {
         UpdateTime();
     }
     OnTrueTime = TrueEmulatedTime;
-    
-    if (++tick_counter >= 60) {
-        tick_counter = 0;
-        // Force the shell output to write to disk exactly every 1 second
-        fflush(stdout);
-        fflush(stderr);
-    }
 }
 
 // ---------------------------------------------------------
@@ -266,17 +256,11 @@ void DiskRevokeWritable(int d) {}
 // MAIN ENTRY POINT
 // ---------------------------------------------------------
 int main(int argc, char *argv[]) {
-    // Pipe ENTIRE shell output (stdout & stderr) to this file
     freopen("vmac_debug.log", "w", stdout);
     freopen("vmac_debug.log", "a", stderr);
     
-    printf("Mini vMac for Kindle: Starting up...\n");
-
     FILE *f = fopen("vMac.ROM", "rb");
-    if (!f) {
-        printf("FATAL: vMac.ROM not found!\n");
-        return 1;
-    }
+    if (!f) return 1;
     fseek(f, 0, SEEK_END);
     long rom_size = ftell(f);
     fseek(f, 0, SEEK_SET);
@@ -284,23 +268,15 @@ int main(int argc, char *argv[]) {
     AllocMacMemory(rom_size);
     fread(ROM, 1, rom_size, f);
     fclose(f);
-    printf("ROM Loaded. Size: %ld\n", rom_size);
 
     mac_disk = fopen("disk.img", "r+b");
     if (mac_disk) {
         vSonyInsertedMask = 1;
         vSonyWritableMask = 1;
-        printf("disk.img mounted!\n");
-    } else {
-        printf("disk.img not found, Mac will show flashing question mark.\n");
     }
 
     Kindle_Init();
     InitTime();
-    
-    printf("Launching Core 68k Emulator Loop...\n");
-    
-    // Boot Core
     ProgramMain();
 
     Kindle_CleanUp();
