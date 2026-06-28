@@ -17,7 +17,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
-#include <ucontext.h>
 
 #define TRUE_KINDLE_WIDTH  1072
 #define TRUE_KINDLE_HEIGHT 1448
@@ -37,10 +36,14 @@ extern void EmulationReserveAlloc(void);
 extern void ProgramMain(void);
 extern uint8_t *VidMem;
 
-uint8_t *ROM = NULL;
+char *ROM = NULL;
 FILE *mac_disk = NULL;
 static int frame_skip_counter = 0;
 static uint8_t *RawAllocBlock = NULL;
+
+// THE FIX: Force perfect 4-byte memory alignment for the ARM CPU
+static uint32_t dummy_audio_buffer[8192 / 4];
+static char vSonyNewDiskName[256];
 
 // ---------------------------------------------------------
 // 0. SIGNAL INTERCEPTOR
@@ -56,7 +59,7 @@ void fatal_crash_handler(int sig, siginfo_t *si, void *unused) {
         fprintf(stderr, "Diagnosis: Blitter out of bounds in /dev/fb0\n");
     } else if (VidMem && (uint8_t*)si->si_addr >= VidMem && (uint8_t*)si->si_addr < (VidMem + 190080)) {
         fprintf(stderr, "Diagnosis: Core crashed reading Mac VidMem\n");
-    } else if (ROM && (uint8_t*)si->si_addr >= ROM && (uint8_t*)si->si_addr < (ROM + 131072)) {
+    } else if (ROM && (uint8_t*)si->si_addr >= (uint8_t*)ROM && (uint8_t*)si->si_addr < ((uint8_t*)ROM + 131072)) {
         fprintf(stderr, "Diagnosis: Core crashed reading Mac ROM\n");
     } else if (si->si_addr == NULL) {
         fprintf(stderr, "Diagnosis: Null Pointer Dereference\n");
@@ -223,7 +226,8 @@ void UpdateTime(void) {
 
 int ExtraTimeNotOver(void) {
     UpdateTime();
-    return 0; // THE FIX: Safely yield the CPU loop to prevent lockups during boot
+    // Safely execute the real timing math so the core doesn't starve
+    return (TrueEmulatedTime == OnTrueTime);
 }
 
 void WaitForNextTick(void) {
@@ -246,10 +250,9 @@ int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
-static uint8_t dummy_audio_buffer[8192];
 void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { 
     *actL = (n < 8192) ? n : 8192; 
-    return dummy_audio_buffer; 
+    return (void*)dummy_audio_buffer; 
 }
 void MySound_EndWrite(uint32_t actL) {}
 
@@ -267,7 +270,6 @@ int PbufGetSize(void *p) { return 0; }
 // ---------------------------------------------------------
 int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0;
 int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
-char vSonyNewDiskName[256];
 
 int AnyDiskInserted(void) { return vSonyInsertedMask != 0; }
 
@@ -283,9 +285,10 @@ int vSonyGetSize(int Drive_No, uint32_t *Sony_Count) {
 int vSonyTransfer(int IsWrite, uint8_t *Buffer, int Drive_No, uint32_t Sony_Start, uint32_t Sony_Count, uint32_t *Sony_ActCount) {
     if (Drive_No == 1 && mac_disk) {
         fseek(mac_disk, Sony_Start, SEEK_SET);
-        if (IsWrite) fwrite(Buffer, 1, Sony_Count, mac_disk);
-        else fread(Buffer, 1, Sony_Count, mac_disk);
-        if (Sony_ActCount) *Sony_ActCount = Sony_Count;
+        uint32_t bytes = 0;
+        if (IsWrite) bytes = fwrite(Buffer, 1, Sony_Count, mac_disk);
+        else bytes = fread(Buffer, 1, Sony_Count, mac_disk);
+        if (Sony_ActCount) *Sony_ActCount = bytes;
         return 0;
     }
     return -1;
@@ -328,13 +331,12 @@ int main(int argc, char *argv[]) {
     fread(ROM, 1, rom_size, f);
     fclose(f);
 
-    // THE DIAGNOSTIC DUMP: This will show us exactly where memory is allocated!
-    printf("\n--- CORE MEMORY MAP ---\n");
-    printf("fb_mem (E-Ink Buffer): %p\n", (void*)fb_mem);
-    printf("VidMem (Mac Screen)  : %p\n", (void*)VidMem);
-    printf("ROM    (Mac BIOS)    : %p\n", (void*)ROM);
-    printf("RawAllocBlock (RAM)  : %p\n", (void*)RawAllocBlock);
-    printf("-----------------------\n\n");
+    printf("\n--- CRITICAL ADDRESS MAP ---\n");
+    printf("dummy_audio_buffer : %p\n", (void*)dummy_audio_buffer);
+    printf("vSonyNewDiskName   : %p\n", (void*)vSonyNewDiskName);
+    printf("ROM                : %p\n", (void*)ROM);
+    printf("VidMem             : %p\n", (void*)VidMem);
+    printf("----------------------------\n\n");
 
     mac_disk = fopen("disk.img", "r+b");
     if (mac_disk) {
