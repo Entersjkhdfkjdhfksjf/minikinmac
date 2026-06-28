@@ -22,7 +22,6 @@
 
 #define MAC_WIDTH  1440
 #define MAC_HEIGHT 1056
-#define KINDLE_BPP 1
 
 static int fbfd = -1;
 static int touch_fd = -1;
@@ -36,11 +35,10 @@ extern uint8_t *VidMem;
 
 char *ROM = NULL;
 FILE *mac_disk = NULL;
-static bool mac_has_booted = false;
 static int frame_skip_counter = 0;
 
 // ---------------------------------------------------------
-// 1. HARDWARE BLITTER (WITH 15 FPS DECIMATOR)
+// 1. HARDWARE BLITTER (15 FPS UNCONDITIONAL DECIMATOR)
 // ---------------------------------------------------------
 void Kindle_Init(void) {
     fbfd = fbink_open();
@@ -62,7 +60,6 @@ void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
     if (!fb_mem || !VidMem) return;
     
     int mac_stride = MAC_WIDTH / 8; 
-    bool frame_has_content = false;
 
     // Rotate and map to 1088 Stride (Memory-Safe)
     for (int row = y; row < y + height; row++) {
@@ -72,8 +69,6 @@ void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
             int bit_idx = 7 - (col % 8);
             uint8_t mac_byte = VidMem[byte_idx];
             
-            if (mac_byte != 0x00) frame_has_content = true;
-
             int k_x = row;
             int k_y = MAC_WIDTH - 1 - col;
             int fb_idx = (k_y * TRUE_KINDLE_STRIDE) + k_x;
@@ -81,18 +76,12 @@ void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
             fb_mem[fb_idx] = ((mac_byte >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
-    
-    if (frame_has_content) {
-        mac_has_booted = true;
-    }
 
-    // THE FIX: Decimate the updates! Only trigger the hardware once every 4 frames (15 FPS)
-    if (mac_has_booted) {
-        frame_skip_counter++;
-        if (frame_skip_counter >= 4) {
-            fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
-            frame_skip_counter = 0;
-        }
+    // Unconditionally decimate to 15 FPS so the e-ink controller doesn't choke
+    frame_skip_counter++;
+    if (frame_skip_counter >= 4) {
+        fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
+        frame_skip_counter = 0;
     }
 }
 
@@ -143,7 +132,7 @@ void AllocMacMemory(long rom_size) {
 }
 
 // ---------------------------------------------------------
-// 3. PLATFORM TIMING & LOGGING
+// 3. PLATFORM TIMING & LOGGING (FIXED)
 // ---------------------------------------------------------
 unsigned int TrueEmulatedTime = 0;
 unsigned int OnTrueTime = 1;
@@ -175,13 +164,7 @@ int ExtraTimeNotOver(void) {
 void WaitForNextTick(void) {
     Kindle_PollInput();
     
-    // Warp speed through RAM test
-    if (!mac_has_booted) {
-        TrueEmulatedTime++;
-        OnTrueTime = TrueEmulatedTime;
-        return;
-    }
-
+    // THE FIX: Allow natural time to pass so the Mac VIA interrupts don't panic
     while (TrueEmulatedTime == OnTrueTime) {
         usleep(1000); 
         UpdateTime();
