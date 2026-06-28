@@ -58,11 +58,12 @@ void Kindle_Init(void) {
         
         fb_size = finfo.smem_len; 
         kindle_stride = finfo.line_length;
-        physical_offset = (vinfo.yoffset * kindle_stride) + (vinfo.xoffset);
         
+        // Pan to Page 0 and FORCE offset to 0 to prevent out-of-bounds writing
         vinfo.yoffset = 0;
         vinfo.xoffset = 0;
         ioctl(fbfd, FBIOPAN_DISPLAY, &vinfo);
+        physical_offset = 0; 
         
     } else {
         fb_size = 1448 * 1088;
@@ -89,7 +90,7 @@ void Kindle_Init(void) {
 void Kindle_RenderRegion(int top, int left, int bottom, int right) {
     if (!fb_mem || !VidMem) return;
     
-    // BULLETPROOF SAFETY CLAMPS (Prevents Segmentation Faults)
+    // Safety Clamps to prevent graphics-related Segfaults
     if (top < 0) top = 0;
     if (left < 0) left = 0;
     if (bottom > MAC_HEIGHT) bottom = MAC_HEIGHT;
@@ -125,13 +126,11 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
 // ---------------------------------------------------------
 // 2. MINI VMAC RENDER HOOKS
 // ---------------------------------------------------------
-
 void HaveChangedScreenBuff(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right) {
     Kindle_RenderRegion(top, left, bottom, right);
 }
 
 void DoneWithDrawingForTick(void) { 
-    // THE FIX: MAC_HEIGHT is bottom, MAC_WIDTH is right!
     Kindle_RenderRegion(0, 0, MAC_HEIGHT, MAC_WIDTH); 
 }
 
@@ -238,8 +237,14 @@ int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
-void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { *actL = 0; return NULL; }
+// THE SOUND FIX: Provide a dummy buffer so the Mac Startup Chime doesn't Segfault!
+static uint8_t dummy_audio_buffer[8192];
+void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { 
+    *actL = (n < 8192) ? n : 8192; 
+    return dummy_audio_buffer; 
+}
 void MySound_EndWrite(uint32_t actL) {}
+
 void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
 void CheckPbuf(void) {}
 int HTCEexport(void *i) { return -1; }
