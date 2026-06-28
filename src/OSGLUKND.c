@@ -29,6 +29,7 @@ static size_t fb_size = 0;
 static FBInkConfig fb_cfg = {0};
 
 static int kindle_stride = 1088;
+static int physical_offset = 0;
 
 extern void EmulationReserveAlloc(void);
 extern void ProgramMain(void);
@@ -57,15 +58,16 @@ void Kindle_Init(void) {
         
         fb_size = finfo.smem_len; 
         kindle_stride = finfo.line_length;
+        physical_offset = (vinfo.yoffset * kindle_stride) + (vinfo.xoffset);
         
         vinfo.yoffset = 0;
         vinfo.xoffset = 0;
         ioctl(fbfd, FBIOPAN_DISPLAY, &vinfo);
-        printf("Hardware panned to Page 0.\n");
         
     } else {
         fb_size = 1448 * 1088;
         kindle_stride = 1088;
+        physical_offset = 0;
     }
 
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
@@ -76,12 +78,9 @@ void Kindle_Init(void) {
     fbink_print(fbfd, "MINI VMAC ALIVE: CHECKING HARDWARE...", &fb_cfg);
 
     if (fb_mem) {
-        printf("Executing E-Ink Stripe Test...\n");
         for (int row = 500; row < 600; row++) {
             memset(fb_mem + (row * kindle_stride), 0x00, TRUE_KINDLE_WIDTH);
         }
-        // THE FIX: Correct coordinate order: fbfd, y, x, w, h
-        // y=500, x=0, width=1072, height=100
         fbink_refresh(fbfd, 500, 0, TRUE_KINDLE_WIDTH, 100, &fb_cfg);
     }
 }
@@ -89,6 +88,12 @@ void Kindle_Init(void) {
 // Universal Screen Update Logic
 void Kindle_RenderRegion(int top, int left, int bottom, int right) {
     if (!fb_mem || !VidMem) return;
+    
+    // BULLETPROOF SAFETY CLAMPS (Prevents Segmentation Faults)
+    if (top < 0) top = 0;
+    if (left < 0) left = 0;
+    if (bottom > MAC_HEIGHT) bottom = MAC_HEIGHT;
+    if (right > MAC_WIDTH) right = MAC_WIDTH;
     
     int mac_stride = MAC_WIDTH / 8; 
 
@@ -101,14 +106,13 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
             int k_x = row;
             int k_y = MAC_WIDTH - 1 - col;
             
-            int fb_idx = (k_y * kindle_stride) + k_x;
+            int fb_idx = physical_offset + (k_y * kindle_stride) + k_x;
             fb_mem[fb_idx] = ((VidMem[byte_idx] >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
 
     frame_skip_counter++;
     if (frame_skip_counter >= 4) {
-        // THE FIX: Explicitly pass the full screen dimensions instead of 0,0,0,0
         fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
         frame_skip_counter = 0;
         
@@ -123,20 +127,12 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
 // ---------------------------------------------------------
 
 void HaveChangedScreenBuff(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right) {
-    static int hc_count = 0;
-    if (hc_count < 5) {
-        printf("[kindle] HaveChangedScreenBuff #%d called! Top:%d Left:%d\n", hc_count++, top, left);
-    }
     Kindle_RenderRegion(top, left, bottom, right);
 }
 
 void DoneWithDrawingForTick(void) { 
-    static int dt_count = 0;
-    if (dt_count < 5) {
-        printf("[kindle] DoneWithDrawingForTick #%d called! buf=%p first_byte=%02x\n", 
-               dt_count++, (void*)VidMem, VidMem ? VidMem[0] : 0xFF);
-    }
-    Kindle_RenderRegion(0, 0, MAC_WIDTH, MAC_HEIGHT); 
+    // THE FIX: MAC_HEIGHT is bottom, MAC_WIDTH is right!
+    Kindle_RenderRegion(0, 0, MAC_HEIGHT, MAC_WIDTH); 
 }
 
 void Screen_OutputFrame(void) {}
