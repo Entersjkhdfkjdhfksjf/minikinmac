@@ -21,8 +21,8 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE FIX: Force -O0 (Zero Optimization) to stop GCC from breaking the ARM jump-tables!
-sed -i 's/-Os /-O0 -mno-unaligned-access -fno-strict-aliasing /g' Makefile
+# THE FIX: Removed the trailing space so it actually catches and kills -Os!
+sed -i 's/-Os/-O0 -mno-unaligned-access -fno-strict-aliasing/g' Makefile
 sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
