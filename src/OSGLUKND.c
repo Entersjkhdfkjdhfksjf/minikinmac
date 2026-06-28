@@ -16,6 +16,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <signal.h>
+#include <ucontext.h>
 
 #define TRUE_KINDLE_WIDTH  1072
 #define TRUE_KINDLE_HEIGHT 1448
@@ -40,7 +42,44 @@ FILE *mac_disk = NULL;
 static int frame_skip_counter = 0;
 
 // ---------------------------------------------------------
-// 1. HARDWARE BLITTER & SMOKE TEST
+// 0. SIGNAL INTERCEPTOR (THE SMOKING GUN)
+// ---------------------------------------------------------
+void fatal_crash_handler(int sig, siginfo_t *si, void *unused) {
+    fprintf(stderr, "\n=========================================\n");
+    fprintf(stderr, "      FATAL EMULATOR CRASH CAUGHT!       \n");
+    fprintf(stderr, "=========================================\n");
+    if (sig == SIGSEGV) {
+        fprintf(stderr, "Error: SIGSEGV (Segmentation Fault)\n");
+    } else if (sig == SIGBUS) {
+        fprintf(stderr, "Error: SIGBUS (Unaligned Memory Access)\n");
+    } else {
+        fprintf(stderr, "Error: Signal %d\n", sig);
+    }
+    
+    // This prints the exact memory address that killed the emulator
+    fprintf(stderr, "Faulting Memory Address: %p\n", si->si_addr);
+    
+    // Check if the crash happened inside the Framebuffer
+    if (fb_mem && (uint8_t*)si->si_addr >= fb_mem && (uint8_t*)si->si_addr < (fb_mem + fb_size)) {
+        fprintf(stderr, "Diagnosis: Blitter out of bounds in /dev/fb0\n");
+    } 
+    // Check if the crash happened inside Mac OS RAM
+    else if (VidMem && (uint8_t*)si->si_addr >= VidMem && (uint8_t*)si->si_addr < (VidMem + 190080)) {
+        fprintf(stderr, "Diagnosis: Core crashed while reading Mac VidMem\n");
+    } 
+    else if (si->si_addr == NULL) {
+        fprintf(stderr, "Diagnosis: Null Pointer Dereference in Core\n");
+    }
+    else {
+        fprintf(stderr, "Diagnosis: Crash inside Emulated CPU/ROM (Alignment Issue)\n");
+    }
+    fprintf(stderr, "=========================================\n\n");
+    fflush(stderr);
+    exit(1);
+}
+
+// ---------------------------------------------------------
+// 1. HARDWARE BLITTER 
 // ---------------------------------------------------------
 void Kindle_Init(void) {
     fbfd = fbink_open();
@@ -53,18 +92,14 @@ void Kindle_Init(void) {
     struct fb_fix_screeninfo finfo;
     struct fb_var_screeninfo vinfo;
     
-    if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == 0 && 
-        ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == 0) {
-        
+    if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == 0 && ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == 0) {
         fb_size = finfo.smem_len; 
         kindle_stride = finfo.line_length;
         
-        // Pan to Page 0 and FORCE offset to 0 to prevent out-of-bounds writing
         vinfo.yoffset = 0;
         vinfo.xoffset = 0;
         ioctl(fbfd, FBIOPAN_DISPLAY, &vinfo);
         physical_offset = 0; 
-        
     } else {
         fb_size = 1448 * 1088;
         kindle_stride = 1088;
@@ -73,24 +108,11 @@ void Kindle_Init(void) {
 
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
     touch_fd = open("/dev/input/event1", O_RDONLY | O_NONBLOCK);
-
-    fb_cfg.row = 15;
-    fb_cfg.col = 5;
-    fbink_print(fbfd, "MINI VMAC ALIVE: CHECKING HARDWARE...", &fb_cfg);
-
-    if (fb_mem) {
-        for (int row = 500; row < 600; row++) {
-            memset(fb_mem + (row * kindle_stride), 0x00, TRUE_KINDLE_WIDTH);
-        }
-        fbink_refresh(fbfd, 500, 0, TRUE_KINDLE_WIDTH, 100, &fb_cfg);
-    }
 }
 
-// Universal Screen Update Logic
 void Kindle_RenderRegion(int top, int left, int bottom, int right) {
     if (!fb_mem || !VidMem) return;
     
-    // Safety Clamps to prevent graphics-related Segfaults
     if (top < 0) top = 0;
     if (left < 0) left = 0;
     if (bottom > MAC_HEIGHT) bottom = MAC_HEIGHT;
@@ -100,7 +122,6 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
 
     for (int row = top; row < bottom; row++) {
         for (int col = left; col < right; col++) {
-            
             int byte_idx = (row * mac_stride) + (col / 8);
             int bit_idx = 7 - (col % 8);
             
@@ -116,10 +137,7 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
     if (frame_skip_counter >= 4) {
         fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
         frame_skip_counter = 0;
-        
-        if (fb_cfg.wfm_mode == WFM_GC16) {
-            fb_cfg.wfm_mode = WFM_A2;
-        }
+        if (fb_cfg.wfm_mode == WFM_GC16) fb_cfg.wfm_mode = WFM_A2;
     }
 }
 
@@ -129,18 +147,17 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
 void HaveChangedScreenBuff(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right) {
     Kindle_RenderRegion(top, left, bottom, right);
 }
-
 void DoneWithDrawingForTick(void) { 
     Kindle_RenderRegion(0, 0, MAC_HEIGHT, MAC_WIDTH); 
 }
-
 void Screen_OutputFrame(void) {}
 
 // ---------------------------------------------------------
-// 3. CORE MEMORY ALLOCATOR
+// 3. CORE MEMORY ALLOCATOR (WITH STRICT PAGE ALIGNMENT)
 // ---------------------------------------------------------
 static size_t ReserveAllocOffset = 0;
 static uint8_t *ReserveAllocBigBlock = NULL;
+static uint8_t *RawAllocBlock = NULL;
 
 void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) {
     size_t alignment = 1 << align;
@@ -160,8 +177,14 @@ void AllocMacMemory(long rom_size) {
     ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
     EmulationReserveAlloc();
 
-    ReserveAllocBigBlock = (uint8_t*)calloc(1, ReserveAllocOffset);
-    if (!ReserveAllocBigBlock) exit(1);
+    // THE FIX: Over-allocate by 4096 bytes to guarantee strict hardware page alignment
+    RawAllocBlock = (uint8_t*)calloc(1, ReserveAllocOffset + 4096);
+    if (!RawAllocBlock) exit(1);
+
+    // Shift the pointer until it perfectly matches a 4096-byte physical boundary
+    size_t rptr = (size_t)RawAllocBlock;
+    size_t rem = rptr % 4096;
+    ReserveAllocBigBlock = RawAllocBlock + (4096 - rem);
 
     ReserveAllocOffset = 0;
     ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
@@ -183,6 +206,7 @@ void Kindle_CleanUp(void) {
         if (fb_mem) munmap(fb_mem, fb_size);
         fbink_close(fbfd);
     }
+    if (RawAllocBlock) free(RawAllocBlock);
 }
 
 unsigned int TrueEmulatedTime = 0;
@@ -203,7 +227,6 @@ void UpdateTime(void) {
     while (elapsed_usec >= 16666) { 
         TrueEmulatedTime++;
         elapsed_usec -= 16666;
-        
         last_time.tv_usec += 16666;
         if (last_time.tv_usec >= 1000000) {
             last_time.tv_usec -= 1000000;
@@ -237,14 +260,8 @@ int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
-// THE SOUND FIX: Provide a dummy buffer so the Mac Startup Chime doesn't Segfault!
-static uint8_t dummy_audio_buffer[8192];
-void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { 
-    *actL = (n < 8192) ? n : 8192; 
-    return dummy_audio_buffer; 
-}
+void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { *actL = 0; return NULL; }
 void MySound_EndWrite(uint32_t actL) {}
-
 void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
 void CheckPbuf(void) {}
 int HTCEexport(void *i) { return -1; }
@@ -297,9 +314,21 @@ void DiskRevokeWritable(int d) {}
 // MAIN ENTRY POINT
 // ---------------------------------------------------------
 int main(int argc, char *argv[]) {
+    // 1. Unbuffer the logs completely so they never drop output during a crash
     freopen("vmac_debug.log", "w", stdout);
     freopen("vmac_debug.log", "a", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+
+    // 2. Attach our custom Linux kernel crash interceptors
+    struct sigaction sa;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_sigaction = fatal_crash_handler;
+    sigaction(SIGSEGV, &sa, NULL); // Memory bounds violation
+    sigaction(SIGBUS, &sa, NULL);  // ARM Unaligned hardware access
+    
+    printf("Mini vMac for Kindle: Initialization Begun.\n");
     
     FILE *f = fopen("vMac.ROM", "rb");
     if (!f) return 1;
@@ -319,6 +348,8 @@ int main(int argc, char *argv[]) {
 
     Kindle_Init();
     InitTime();
+    
+    printf("Handing execution over to 68k Core...\n");
     ProgramMain();
 
     Kindle_CleanUp();
