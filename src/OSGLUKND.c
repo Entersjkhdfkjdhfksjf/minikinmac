@@ -37,41 +37,31 @@ extern void EmulationReserveAlloc(void);
 extern void ProgramMain(void);
 extern uint8_t *VidMem;
 
-char *ROM = NULL;
+uint8_t *ROM = NULL;
 FILE *mac_disk = NULL;
 static int frame_skip_counter = 0;
+static uint8_t *RawAllocBlock = NULL;
 
 // ---------------------------------------------------------
-// 0. SIGNAL INTERCEPTOR (THE SMOKING GUN)
+// 0. SIGNAL INTERCEPTOR
 // ---------------------------------------------------------
 void fatal_crash_handler(int sig, siginfo_t *si, void *unused) {
     fprintf(stderr, "\n=========================================\n");
     fprintf(stderr, "      FATAL EMULATOR CRASH CAUGHT!       \n");
     fprintf(stderr, "=========================================\n");
-    if (sig == SIGSEGV) {
-        fprintf(stderr, "Error: SIGSEGV (Segmentation Fault)\n");
-    } else if (sig == SIGBUS) {
-        fprintf(stderr, "Error: SIGBUS (Unaligned Memory Access)\n");
-    } else {
-        fprintf(stderr, "Error: Signal %d\n", sig);
-    }
-    
-    // This prints the exact memory address that killed the emulator
+    fprintf(stderr, "Error: Signal %d\n", sig);
     fprintf(stderr, "Faulting Memory Address: %p\n", si->si_addr);
     
-    // Check if the crash happened inside the Framebuffer
     if (fb_mem && (uint8_t*)si->si_addr >= fb_mem && (uint8_t*)si->si_addr < (fb_mem + fb_size)) {
         fprintf(stderr, "Diagnosis: Blitter out of bounds in /dev/fb0\n");
-    } 
-    // Check if the crash happened inside Mac OS RAM
-    else if (VidMem && (uint8_t*)si->si_addr >= VidMem && (uint8_t*)si->si_addr < (VidMem + 190080)) {
-        fprintf(stderr, "Diagnosis: Core crashed while reading Mac VidMem\n");
-    } 
-    else if (si->si_addr == NULL) {
-        fprintf(stderr, "Diagnosis: Null Pointer Dereference in Core\n");
-    }
-    else {
-        fprintf(stderr, "Diagnosis: Crash inside Emulated CPU/ROM (Alignment Issue)\n");
+    } else if (VidMem && (uint8_t*)si->si_addr >= VidMem && (uint8_t*)si->si_addr < (VidMem + 190080)) {
+        fprintf(stderr, "Diagnosis: Core crashed reading Mac VidMem\n");
+    } else if (ROM && (uint8_t*)si->si_addr >= ROM && (uint8_t*)si->si_addr < (ROM + 131072)) {
+        fprintf(stderr, "Diagnosis: Core crashed reading Mac ROM\n");
+    } else if (si->si_addr == NULL) {
+        fprintf(stderr, "Diagnosis: Null Pointer Dereference\n");
+    } else {
+        fprintf(stderr, "Diagnosis: Jump Table or Alignment Crash\n");
     }
     fprintf(stderr, "=========================================\n\n");
     fflush(stderr);
@@ -79,7 +69,7 @@ void fatal_crash_handler(int sig, siginfo_t *si, void *unused) {
 }
 
 // ---------------------------------------------------------
-// 1. HARDWARE BLITTER 
+// 1. HARDWARE BLITTER
 // ---------------------------------------------------------
 void Kindle_Init(void) {
     fbfd = fbink_open();
@@ -95,7 +85,6 @@ void Kindle_Init(void) {
     if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == 0 && ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == 0) {
         fb_size = finfo.smem_len; 
         kindle_stride = finfo.line_length;
-        
         vinfo.yoffset = 0;
         vinfo.xoffset = 0;
         ioctl(fbfd, FBIOPAN_DISPLAY, &vinfo);
@@ -127,8 +116,8 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
             
             int k_x = row;
             int k_y = MAC_WIDTH - 1 - col;
-            
             int fb_idx = physical_offset + (k_y * kindle_stride) + k_x;
+            
             fb_mem[fb_idx] = ((VidMem[byte_idx] >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
@@ -142,7 +131,7 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
 }
 
 // ---------------------------------------------------------
-// 2. MINI VMAC RENDER HOOKS
+// 2. RENDER HOOKS
 // ---------------------------------------------------------
 void HaveChangedScreenBuff(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right) {
     Kindle_RenderRegion(top, left, bottom, right);
@@ -153,11 +142,10 @@ void DoneWithDrawingForTick(void) {
 void Screen_OutputFrame(void) {}
 
 // ---------------------------------------------------------
-// 3. CORE MEMORY ALLOCATOR (WITH STRICT PAGE ALIGNMENT)
+// 3. CORE MEMORY ALLOCATOR 
 // ---------------------------------------------------------
 static size_t ReserveAllocOffset = 0;
 static uint8_t *ReserveAllocBigBlock = NULL;
-static uint8_t *RawAllocBlock = NULL;
 
 void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) {
     size_t alignment = 1 << align;
@@ -177,11 +165,9 @@ void AllocMacMemory(long rom_size) {
     ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
     EmulationReserveAlloc();
 
-    // THE FIX: Over-allocate by 4096 bytes to guarantee strict hardware page alignment
     RawAllocBlock = (uint8_t*)calloc(1, ReserveAllocOffset + 4096);
     if (!RawAllocBlock) exit(1);
 
-    // Shift the pointer until it perfectly matches a 4096-byte physical boundary
     size_t rptr = (size_t)RawAllocBlock;
     size_t rem = rptr % 4096;
     ReserveAllocBigBlock = RawAllocBlock + (4096 - rem);
@@ -237,7 +223,7 @@ void UpdateTime(void) {
 
 int ExtraTimeNotOver(void) {
     UpdateTime();
-    return (TrueEmulatedTime == OnTrueTime);
+    return 0; // THE FIX: Safely yield the CPU loop to prevent lockups during boot
 }
 
 void WaitForNextTick(void) {
@@ -250,7 +236,7 @@ void WaitForNextTick(void) {
 }
 
 // ---------------------------------------------------------
-// 5. CORE STUBS & VARIABLES
+// 5. CORE STUBS & SOUND
 // ---------------------------------------------------------
 int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, WantNotAutoSlow = 0;
 int EmLagTime = 0, ForceMacOff = 0;
@@ -260,8 +246,13 @@ int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
-void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { *actL = 0; return NULL; }
+static uint8_t dummy_audio_buffer[8192];
+void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { 
+    *actL = (n < 8192) ? n : 8192; 
+    return dummy_audio_buffer; 
+}
 void MySound_EndWrite(uint32_t actL) {}
+
 void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
 void CheckPbuf(void) {}
 int HTCEexport(void *i) { return -1; }
@@ -292,10 +283,9 @@ int vSonyGetSize(int Drive_No, uint32_t *Sony_Count) {
 int vSonyTransfer(int IsWrite, uint8_t *Buffer, int Drive_No, uint32_t Sony_Start, uint32_t Sony_Count, uint32_t *Sony_ActCount) {
     if (Drive_No == 1 && mac_disk) {
         fseek(mac_disk, Sony_Start, SEEK_SET);
-        uint32_t bytes = 0;
-        if (IsWrite) bytes = fwrite(Buffer, 1, Sony_Count, mac_disk);
-        else bytes = fread(Buffer, 1, Sony_Count, mac_disk);
-        if (Sony_ActCount) *Sony_ActCount = bytes;
+        if (IsWrite) fwrite(Buffer, 1, Sony_Count, mac_disk);
+        else fread(Buffer, 1, Sony_Count, mac_disk);
+        if (Sony_ActCount) *Sony_ActCount = Sony_Count;
         return 0;
     }
     return -1;
@@ -314,19 +304,17 @@ void DiskRevokeWritable(int d) {}
 // MAIN ENTRY POINT
 // ---------------------------------------------------------
 int main(int argc, char *argv[]) {
-    // 1. Unbuffer the logs completely so they never drop output during a crash
     freopen("vmac_debug.log", "w", stdout);
     freopen("vmac_debug.log", "a", stderr);
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
 
-    // 2. Attach our custom Linux kernel crash interceptors
     struct sigaction sa;
     sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
     sa.sa_sigaction = fatal_crash_handler;
-    sigaction(SIGSEGV, &sa, NULL); // Memory bounds violation
-    sigaction(SIGBUS, &sa, NULL);  // ARM Unaligned hardware access
+    sigaction(SIGSEGV, &sa, NULL); 
+    sigaction(SIGBUS, &sa, NULL);  
     
     printf("Mini vMac for Kindle: Initialization Begun.\n");
     
@@ -339,6 +327,14 @@ int main(int argc, char *argv[]) {
     AllocMacMemory(rom_size);
     fread(ROM, 1, rom_size, f);
     fclose(f);
+
+    // THE DIAGNOSTIC DUMP: This will show us exactly where memory is allocated!
+    printf("\n--- CORE MEMORY MAP ---\n");
+    printf("fb_mem (E-Ink Buffer): %p\n", (void*)fb_mem);
+    printf("VidMem (Mac Screen)  : %p\n", (void*)VidMem);
+    printf("ROM    (Mac BIOS)    : %p\n", (void*)ROM);
+    printf("RawAllocBlock (RAM)  : %p\n", (void*)RawAllocBlock);
+    printf("-----------------------\n\n");
 
     mac_disk = fopen("disk.img", "r+b");
     if (mac_disk) {
