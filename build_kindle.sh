@@ -13,16 +13,17 @@ cd -
 echo "=> Compiling Mini vMac setup tool (host compiler)..."
 gcc setup/tool.c -o setup_t
 
+# THE FIX 1: -sound 0 completely amputates the sound subsystem from the emulator core
 echo "=> Generating core configuration..."
-./setup_t -t larm -hres 1440 -vres 1056 > setup.sh
+./setup_t -t larm -hres 1440 -vres 1056 -sound 0 > setup.sh
 chmod +x setup.sh
 ./setup.sh
 
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE FIX: Removed the trailing space so it actually catches and kills -Os!
-sed -i 's/-Os/-O0 -mno-unaligned-access -fno-strict-aliasing/g' Makefile
+# THE FIX 2: -marm forces 32-bit instruction alignment, preventing jump-table crashes!
+sed -i 's/-Os/-O0 -marm -mno-unaligned-access -fno-strict-aliasing/g' Makefile
 sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
