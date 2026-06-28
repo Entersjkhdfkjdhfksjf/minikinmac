@@ -34,8 +34,7 @@ static int kindle_stride = 1088;
 extern void EmulationReserveAlloc(void);
 extern void ProgramMain(void);
 
-// Mini vMac 37+ uses screencurrentbuff instead of VidMem
-extern uint8_t *screencurrentbuff;
+// The linker proved this is the only correct buffer!
 extern uint8_t *VidMem;
 
 char *ROM = NULL;
@@ -52,7 +51,7 @@ void Kindle_Init(void) {
     fbink_init(fbfd, &fb_cfg);
     fb_cfg.is_flashing = false;
     
-    // CLAUDE'S FIX: Start with a heavy, full-screen sweep waveform
+    // Start with a heavy, full-screen sweep waveform
     fb_cfg.wfm_mode = WFM_GC16; 
 
     struct fb_fix_screeninfo finfo;
@@ -71,7 +70,7 @@ void Kindle_Init(void) {
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
     touch_fd = open("/dev/input/event1", O_RDONLY | O_NONBLOCK);
 
-    // CLAUDE'S SMOKE TEST (Adapted for double-buffering)
+    // SMOKE TEST (Adapted for double-buffering)
     // Draws a solid black stripe across the middle of the screen
     if (fb_mem) {
         printf("Executing E-Ink Smoke Test...\n");
@@ -84,12 +83,8 @@ void Kindle_Init(void) {
 
 // Universal Screen Update Logic
 void Kindle_RenderRegion(int top, int left, int bottom, int right) {
-    if (!fb_mem) return;
+    if (!fb_mem || !VidMem) return;
     
-    // Fallback to VidMem if screencurrentbuff isn't initialized yet
-    uint8_t *buf = screencurrentbuff ? screencurrentbuff : VidMem;
-    if (!buf) return;
-
     int mac_stride = MAC_WIDTH / 8; 
 
     for (int row = top; row < bottom; row++) {
@@ -102,7 +97,7 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
             int k_y = MAC_WIDTH - 1 - col;
             int fb_idx = physical_offset + (k_y * kindle_stride) + k_x;
             
-            fb_mem[fb_idx] = ((buf[byte_idx] >> bit_idx) & 1) ? 0x00 : 0xFF;
+            fb_mem[fb_idx] = ((VidMem[byte_idx] >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
 
@@ -112,7 +107,7 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
         fbink_refresh(fbfd, 0, 0, 0, 0, &fb_cfg);
         frame_skip_counter = 0;
         
-        // CLAUDE'S FIX: Once the first GC16 frame successfully draws, switch to fast A2 mode
+        // Once the first GC16 frame successfully draws, switch to fast A2 mode
         if (fb_cfg.wfm_mode == WFM_GC16) {
             fb_cfg.wfm_mode = WFM_A2;
         }
@@ -123,7 +118,7 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
 // 2. MINI VMAC RENDER HOOKS
 // ---------------------------------------------------------
 
-// Hook 1: Modern v37+ Regional Update
+// Hook 1: Regional Update Probe
 void HaveChangedScreenBuff(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right) {
     static int hc_count = 0;
     if (hc_count < 5) {
@@ -132,13 +127,12 @@ void HaveChangedScreenBuff(uint16_t top, uint16_t left, uint16_t bottom, uint16_
     Kindle_RenderRegion(top, left, bottom, right);
 }
 
-// Hook 2: Legacy tick-based update
+// Hook 2: Tick-based Update Probe
 void DoneWithDrawingForTick(void) { 
     static int dt_count = 0;
     if (dt_count < 5) {
-        uint8_t *buf = screencurrentbuff ? screencurrentbuff : VidMem;
         printf("[kindle] DoneWithDrawingForTick #%d called! buf=%p first_byte=%02x\n", 
-               dt_count++, (void*)buf, buf ? buf[0] : 0xFF);
+               dt_count++, (void*)VidMem, VidMem ? VidMem[0] : 0xFF);
     }
     Kindle_RenderRegion(0, 0, MAC_WIDTH, MAC_HEIGHT); 
 }
