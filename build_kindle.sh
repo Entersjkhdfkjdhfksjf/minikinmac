@@ -21,9 +21,8 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE FIX: Replace -Os (Optimize for Size) with -O2 (Speed), and inject ARM jump-table safety flags!
-sed -i 's/-Os /-O2 -mno-unaligned-access -fno-strict-aliasing /g' Makefile
-
+# THE FIX: Force -O0 (Zero Optimization) to stop GCC from breaking the ARM jump-tables!
+sed -i 's/-Os /-O0 -mno-unaligned-access -fno-strict-aliasing /g' Makefile
 sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
@@ -36,4 +35,3 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
-
