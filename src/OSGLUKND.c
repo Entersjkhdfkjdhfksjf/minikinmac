@@ -41,9 +41,9 @@ FILE *mac_disk = NULL;
 static int frame_skip_counter = 0;
 static uint8_t *RawAllocBlock = NULL;
 
-// THE FIX: Force perfect 4-byte memory alignment for the ARM CPU
 static uint32_t dummy_audio_buffer[8192 / 4];
-static char vSonyNewDiskName[256];
+// THE FIX: Removed 'static' so SONYEMDV.c can see this variable again!
+char vSonyNewDiskName[256];
 
 // ---------------------------------------------------------
 // 0. SIGNAL INTERCEPTOR
@@ -226,7 +226,6 @@ void UpdateTime(void) {
 
 int ExtraTimeNotOver(void) {
     UpdateTime();
-    // Safely execute the real timing math so the core doesn't starve
     return (TrueEmulatedTime == OnTrueTime);
 }
 
