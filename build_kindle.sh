@@ -6,8 +6,6 @@ set -e
 echo "=> Fetching FBInk repository (with submodules)..."
 git clone --recurse-submodules https://github.com/NiLuJe/FBInk.git /tmp/FBInk-master
 cd /tmp/FBInk-master
-
-echo "=> Compiling libfbink.a statically for Kindle..."
 make CROSS_TC=armv7-unknown-linux-musleabihf KINDLE=1 staticlib
 find . -name "libfbink.a" -exec cp {} . \;
 cd -
@@ -23,11 +21,10 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE FIX: Inject ARM hardware safety flags!
-# -mno-unaligned-access : Forces GCC to compile safe memory casts (prevents 68k Segfaults)
-# -fno-strict-aliasing : Prevents GCC from optimizing away emulator pointer math
-# -Wl,-z,stack-size=2097152 : Gives the Musl statically linked binary a massive 2MB stack
-sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -mno-unaligned-access -fno-strict-aliasing -Wl,-z,stack-size=2097152 /g' Makefile
+# THE FIX: Replace -Os (Optimize for Size) with -O2 (Speed), and inject ARM jump-table safety flags!
+sed -i 's/-Os /-O2 -mno-unaligned-access -fno-strict-aliasing /g' Makefile
+
+sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
@@ -39,3 +36,4 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
+
