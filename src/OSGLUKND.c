@@ -5,6 +5,7 @@
 
 #include "fbink.h"
 #include <linux/input.h>
+#include <linux/fb.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -18,8 +19,6 @@
 
 #define TRUE_KINDLE_WIDTH  1072
 #define TRUE_KINDLE_HEIGHT 1448
-#define TRUE_KINDLE_STRIDE 1088
-
 #define MAC_WIDTH  1440
 #define MAC_HEIGHT 1056
 
@@ -29,8 +28,14 @@ static uint8_t *fb_mem = NULL;
 static size_t fb_size = 0;
 static FBInkConfig fb_cfg = {0};
 
+static int physical_offset = 0;
+static int kindle_stride = 1088;
+
 extern void EmulationReserveAlloc(void);
 extern void ProgramMain(void);
+
+// Mini vMac 37+ uses screencurrentbuff instead of VidMem
+extern uint8_t *screencurrentbuff;
 extern uint8_t *VidMem;
 
 char *ROM = NULL;
@@ -38,69 +43,110 @@ FILE *mac_disk = NULL;
 static int frame_skip_counter = 0;
 
 // ---------------------------------------------------------
-// 1. HARDWARE BLITTER (15 FPS UNCONDITIONAL DECIMATOR)
+// 1. HARDWARE BLITTER & SMOKE TEST
 // ---------------------------------------------------------
 void Kindle_Init(void) {
     fbfd = fbink_open();
-    if (fbfd < 0) {
-        printf("ERROR: Failed to open fbink!\n");
-        return;
-    }
+    if (fbfd < 0) return;
+    
     fbink_init(fbfd, &fb_cfg);
     fb_cfg.is_flashing = false;
-    fb_cfg.wfm_mode = WFM_A2; // Fast 1-bit waveform
+    
+    // CLAUDE'S FIX: Start with a heavy, full-screen sweep waveform
+    fb_cfg.wfm_mode = WFM_GC16; 
 
-    fb_size = TRUE_KINDLE_HEIGHT * TRUE_KINDLE_STRIDE;
+    struct fb_fix_screeninfo finfo;
+    struct fb_var_screeninfo vinfo;
+    if (ioctl(fbfd, FBIOGET_FSCREENINFO, &finfo) == 0 && 
+        ioctl(fbfd, FBIOGET_VSCREENINFO, &vinfo) == 0) {
+        fb_size = finfo.smem_len; 
+        kindle_stride = finfo.line_length;
+        physical_offset = (vinfo.yoffset * kindle_stride) + (vinfo.xoffset);
+    } else {
+        fb_size = 1448 * 1088;
+        kindle_stride = 1088;
+        physical_offset = 0;
+    }
+
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
-
     touch_fd = open("/dev/input/event1", O_RDONLY | O_NONBLOCK);
+
+    // CLAUDE'S SMOKE TEST (Adapted for double-buffering)
+    // Draws a solid black stripe across the middle of the screen
+    if (fb_mem) {
+        printf("Executing E-Ink Smoke Test...\n");
+        for (int row = 500; row < 600; row++) {
+            memset(fb_mem + physical_offset + (row * kindle_stride), 0x00, TRUE_KINDLE_WIDTH);
+        }
+        fbink_refresh(fbfd, 0, 500, TRUE_KINDLE_WIDTH, 100, &fb_cfg);
+    }
 }
 
-void Kindle_UpdateScreenRect(int x, int y, int width, int height) {
-    if (!fb_mem || !VidMem) return;
+// Universal Screen Update Logic
+void Kindle_RenderRegion(int top, int left, int bottom, int right) {
+    if (!fb_mem) return;
     
+    // Fallback to VidMem if screencurrentbuff isn't initialized yet
+    uint8_t *buf = screencurrentbuff ? screencurrentbuff : VidMem;
+    if (!buf) return;
+
     int mac_stride = MAC_WIDTH / 8; 
 
-    // Rotate and map to 1088 Stride (Memory-Safe)
-    for (int row = y; row < y + height; row++) {
-        for (int col = x; col < x + width; col++) {
+    for (int row = top; row < bottom; row++) {
+        for (int col = left; col < right; col++) {
             
             int byte_idx = (row * mac_stride) + (col / 8);
             int bit_idx = 7 - (col % 8);
-            uint8_t mac_byte = VidMem[byte_idx];
             
             int k_x = row;
             int k_y = MAC_WIDTH - 1 - col;
-            int fb_idx = (k_y * TRUE_KINDLE_STRIDE) + k_x;
+            int fb_idx = physical_offset + (k_y * kindle_stride) + k_x;
             
-            fb_mem[fb_idx] = ((mac_byte >> bit_idx) & 1) ? 0x00 : 0xFF;
+            fb_mem[fb_idx] = ((buf[byte_idx] >> bit_idx) & 1) ? 0x00 : 0xFF;
         }
     }
 
-    // Unconditionally decimate to 15 FPS so the e-ink controller doesn't choke
     frame_skip_counter++;
     if (frame_skip_counter >= 4) {
-        fbink_refresh(fbfd, 0, 0, TRUE_KINDLE_WIDTH, TRUE_KINDLE_HEIGHT, &fb_cfg);
+        // Refresh the whole screen
+        fbink_refresh(fbfd, 0, 0, 0, 0, &fb_cfg);
         frame_skip_counter = 0;
-    }
-}
-
-void Kindle_PollInput(void) {
-    if (touch_fd < 0) return;
-    struct input_event ev;
-    while (read(touch_fd, &ev, sizeof(struct input_event)) > 0) {}
-}
-
-void Kindle_CleanUp(void) {
-    if (touch_fd >= 0) close(touch_fd);
-    if (fbfd >= 0) {
-        if (fb_mem) munmap(fb_mem, fb_size);
-        fbink_close(fbfd);
+        
+        // CLAUDE'S FIX: Once the first GC16 frame successfully draws, switch to fast A2 mode
+        if (fb_cfg.wfm_mode == WFM_GC16) {
+            fb_cfg.wfm_mode = WFM_A2;
+        }
     }
 }
 
 // ---------------------------------------------------------
-// 2. CORE MEMORY ALLOCATOR
+// 2. MINI VMAC RENDER HOOKS
+// ---------------------------------------------------------
+
+// Hook 1: Modern v37+ Regional Update
+void HaveChangedScreenBuff(uint16_t top, uint16_t left, uint16_t bottom, uint16_t right) {
+    static int hc_count = 0;
+    if (hc_count < 5) {
+        printf("[kindle] HaveChangedScreenBuff #%d called! Top:%d Left:%d\n", hc_count++, top, left);
+    }
+    Kindle_RenderRegion(top, left, bottom, right);
+}
+
+// Hook 2: Legacy tick-based update
+void DoneWithDrawingForTick(void) { 
+    static int dt_count = 0;
+    if (dt_count < 5) {
+        uint8_t *buf = screencurrentbuff ? screencurrentbuff : VidMem;
+        printf("[kindle] DoneWithDrawingForTick #%d called! buf=%p first_byte=%02x\n", 
+               dt_count++, (void*)buf, buf ? buf[0] : 0xFF);
+    }
+    Kindle_RenderRegion(0, 0, MAC_WIDTH, MAC_HEIGHT); 
+}
+
+void Screen_OutputFrame(void) {}
+
+// ---------------------------------------------------------
+// 3. CORE MEMORY ALLOCATOR
 // ---------------------------------------------------------
 static size_t ReserveAllocOffset = 0;
 static uint8_t *ReserveAllocBigBlock = NULL;
@@ -132,8 +178,22 @@ void AllocMacMemory(long rom_size) {
 }
 
 // ---------------------------------------------------------
-// 3. PLATFORM TIMING & LOGGING (FIXED)
+// 4. PLATFORM TIMING & INPUT
 // ---------------------------------------------------------
+void Kindle_PollInput(void) {
+    if (touch_fd < 0) return;
+    struct input_event ev;
+    while (read(touch_fd, &ev, sizeof(struct input_event)) > 0) {}
+}
+
+void Kindle_CleanUp(void) {
+    if (touch_fd >= 0) close(touch_fd);
+    if (fbfd >= 0) {
+        if (fb_mem) munmap(fb_mem, fb_size);
+        fbink_close(fbfd);
+    }
+}
+
 unsigned int TrueEmulatedTime = 0;
 unsigned int OnTrueTime = 1;
 struct timeval last_time;
@@ -149,10 +209,15 @@ void UpdateTime(void) {
     gettimeofday(&now, NULL);
     long elapsed_usec = (now.tv_sec - last_time.tv_sec) * 1000000L + (now.tv_usec - last_time.tv_usec);
 
-    if (elapsed_usec >= 16666) { 
-        TrueEmulatedTime += (elapsed_usec / 16666);
-        last_time.tv_sec = now.tv_sec;
-        last_time.tv_usec = now.tv_usec - (elapsed_usec % 16666);
+    while (elapsed_usec >= 16666) { 
+        TrueEmulatedTime++;
+        elapsed_usec -= 16666;
+        
+        last_time.tv_usec += 16666;
+        if (last_time.tv_usec >= 1000000) {
+            last_time.tv_usec -= 1000000;
+            last_time.tv_sec += 1;
+        }
     }
 }
 
@@ -163,8 +228,6 @@ int ExtraTimeNotOver(void) {
 
 void WaitForNextTick(void) {
     Kindle_PollInput();
-    
-    // THE FIX: Allow natural time to pass so the Mac VIA interrupts don't panic
     while (TrueEmulatedTime == OnTrueTime) {
         usleep(1000); 
         UpdateTime();
@@ -173,7 +236,7 @@ void WaitForNextTick(void) {
 }
 
 // ---------------------------------------------------------
-// 4. CORE STUBS & VARIABLES
+// 5. CORE STUBS & VARIABLES
 // ---------------------------------------------------------
 int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, WantNotAutoSlow = 0;
 int EmLagTime = 0, ForceMacOff = 0;
@@ -183,8 +246,6 @@ int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
 int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
-void DoneWithDrawingForTick(void) { Kindle_UpdateScreenRect(0, 0, MAC_WIDTH, MAC_HEIGHT); }
-void Screen_OutputFrame(void) {}
 void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { *actL = 0; return NULL; }
 void MySound_EndWrite(uint32_t actL) {}
 void MyMoveBytes(void *src, void *dst, int len) { memmove(dst, src, len); }
@@ -197,7 +258,7 @@ void PbufDispose(void *p) {}
 int PbufGetSize(void *p) { return 0; }
 
 // ---------------------------------------------------------
-// 5. FLOPPY DISK CONTROLLER
+// 6. FLOPPY DISK CONTROLLER
 // ---------------------------------------------------------
 int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0;
 int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
@@ -241,6 +302,7 @@ void DiskRevokeWritable(int d) {}
 int main(int argc, char *argv[]) {
     freopen("vmac_debug.log", "w", stdout);
     freopen("vmac_debug.log", "a", stderr);
+    setvbuf(stdout, NULL, _IONBF, 0); // Force immediate log writing
     
     FILE *f = fopen("vMac.ROM", "rb");
     if (!f) return 1;
