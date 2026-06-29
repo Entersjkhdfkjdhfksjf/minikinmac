@@ -10,7 +10,7 @@
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/ioctl.h>
-#include <sys/time.h>
+#include <time.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -41,9 +41,9 @@ FILE *mac_disk = NULL;
 static int frame_skip_counter = 0;
 static uint8_t *RawAllocBlock = NULL;
 
-static uint32_t dummy_audio_buffer[8192 / 4];
-// THE FIX: Removed 'static' so SONYEMDV.c can see this variable again!
-char vSonyNewDiskName[256];
+// Force 8-byte alignment on the buffer to protect against 64-bit casts
+static uint64_t dummy_audio_buffer[8192 / 8] __attribute__((aligned(8)));
+char vSonyNewDiskName[256] __attribute__((aligned(8)));
 
 // ---------------------------------------------------------
 // 0. SIGNAL INTERCEPTOR
@@ -200,25 +200,31 @@ void Kindle_CleanUp(void) {
 
 unsigned int TrueEmulatedTime = 0;
 unsigned int OnTrueTime = 1;
-struct timeval last_time;
+
+// THE FIX: Enforce strict 8-byte alignment for 64-bit musl structures
+static struct timespec last_time __attribute__((aligned(8)));
 
 void InitTime(void) {
-    gettimeofday(&last_time, NULL);
+    clock_gettime(CLOCK_MONOTONIC, &last_time);
     TrueEmulatedTime = 0;
     OnTrueTime = 0;
 }
 
 void UpdateTime(void) {
-    struct timeval now;
-    gettimeofday(&now, NULL);
-    long elapsed_usec = (now.tv_sec - last_time.tv_sec) * 1000000L + (now.tv_usec - last_time.tv_usec);
+    struct timespec now __attribute__((aligned(8)));
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    
+    // Safely cast to 64-bit integer to prevent overflow
+    long long elapsed_usec = ((long long)(now.tv_sec - last_time.tv_sec) * 1000000LL) + 
+                             ((now.tv_nsec - last_time.tv_nsec) / 1000LL);
 
     while (elapsed_usec >= 16666) { 
         TrueEmulatedTime++;
         elapsed_usec -= 16666;
-        last_time.tv_usec += 16666;
-        if (last_time.tv_usec >= 1000000) {
-            last_time.tv_usec -= 1000000;
+        
+        last_time.tv_nsec += 16666000;
+        if (last_time.tv_nsec >= 1000000000) {
+            last_time.tv_nsec -= 1000000000;
             last_time.tv_sec += 1;
         }
     }
@@ -239,11 +245,13 @@ void WaitForNextTick(void) {
 }
 
 // ---------------------------------------------------------
-// 5. CORE STUBS & SOUND
+// 5. CORE STUBS & GLOBALS
 // ---------------------------------------------------------
-int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1, WantNotAutoSlow = 0;
+// THE FIX: Protect the core variables by enforcing alignment
+int QuietTime __attribute__((aligned(8))) = 0;
+int QuietSubTicks = 0, SpeedValue = 1, WantNotAutoSlow = 0;
 int EmLagTime = 0, ForceMacOff = 0;
-unsigned int CurMacDateInSeconds = 3800000000;
+unsigned int CurMacDateInSeconds __attribute__((aligned(8))) = 3800000000;
 int CurMacLatitude = 0, CurMacLongitude = 0, CurMacDelta = 0;
 int WantMacReset = 0, WantMacInterrupt = 0;
 int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
@@ -331,10 +339,10 @@ int main(int argc, char *argv[]) {
     fclose(f);
 
     printf("\n--- CRITICAL ADDRESS MAP ---\n");
-    printf("dummy_audio_buffer : %p\n", (void*)dummy_audio_buffer);
-    printf("vSonyNewDiskName   : %p\n", (void*)vSonyNewDiskName);
-    printf("ROM                : %p\n", (void*)ROM);
-    printf("VidMem             : %p\n", (void*)VidMem);
+    printf("last_time (aligned)  : %p\n", (void*)&last_time);
+    printf("dummy_audio_buffer   : %p\n", (void*)dummy_audio_buffer);
+    printf("ROM                  : %p\n", (void*)ROM);
+    printf("VidMem               : %p\n", (void*)VidMem);
     printf("----------------------------\n\n");
 
     mac_disk = fopen("disk.img", "r+b");
