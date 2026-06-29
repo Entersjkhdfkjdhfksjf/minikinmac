@@ -4,7 +4,9 @@
 set -e
 
 echo "=> Fetching FBInk repository (with submodules)..."
-git clone --recurse-submodules https://github.com/NiLuJe/FBInk.git /tmp/FBInk-master
+if [ ! -d "/tmp/FBInk-master" ]; then
+    git clone --recurse-submodules https://github.com/NiLuJe/FBInk.git /tmp/FBInk-master
+fi
 cd /tmp/FBInk-master
 make CROSS_TC=armv7-unknown-linux-musleabihf KINDLE=1 staticlib
 find . -name "libfbink.a" -exec cp {} . \;
@@ -22,20 +24,20 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE FIX: -O1 (Safe Optimization), disable PIE, and disable aggressive null-pointer deletion
-sed -i 's/-Os /-O1 -marm -mno-unaligned-access -fno-strict-aliasing -fno-delete-null-pointer-checks -fwrapv /g' Makefile
-sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -fno-pie -no-pie /g' Makefile
+# THE FIX: -fno-jump-tables forces safe CPU branching!
+# We keep -O2 for speed, and -fwrapv ensures safe integer overflows in the emulator
+sed -i 's/-Os /-O2 -marm -mno-unaligned-access -fno-strict-aliasing -fno-jump-tables -fwrapv /g' Makefile
+
+# 4MB Stack Limit to protect against Stack Overflows
+sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -Wl,-z,stack-size=4194304 /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
-
-# Massive 4MB Stack Limit to prevent Stack Overflows
-sed -i 's|-L/usr/X11R6/lib -lX11|-L/tmp/FBInk-master -lfbink -lm -Wl,-z,stack-size=4194304|g' Makefile
-sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm -Wl,-z,stack-size=4194304|g' Makefile
+sed -i 's|-L/usr/X11R6/lib -lX11|-L/tmp/FBInk-master -lfbink -lm|g' Makefile
+sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm|g' Makefile
 sed -i 's/strip --strip-unneeded/armv7-unknown-linux-musleabihf-strip --strip-unneeded/g' Makefile
 
 echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
-
