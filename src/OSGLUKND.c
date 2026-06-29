@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <signal.h>
+#include <pthread.h>
 
 #define TRUE_KINDLE_WIDTH  1072
 #define TRUE_KINDLE_HEIGHT 1448
@@ -243,23 +244,13 @@ void WaitForNextTick(void) {
 // ---------------------------------------------------------
 // 5. CORE STUBS & GLOBALS
 // ---------------------------------------------------------
-int QuietTime = 0;
-int QuietSubTicks = 0;
-int SpeedValue = 1;
-int WantNotAutoSlow = 0;
-int EmLagTime = 0;
-int ForceMacOff = 0;
+int QuietTime = 0, QuietSubTicks = 0, SpeedValue = 1;
+int WantNotAutoSlow = 0, EmLagTime = 0, ForceMacOff = 0;
 unsigned int CurMacDateInSeconds = 3800000000;
-int CurMacLatitude = 0;
-int CurMacLongitude = 0;
-int CurMacDelta = 0;
-int WantMacReset = 0;
-int WantMacInterrupt = 0;
-int CurMouseV = 0;
-int CurMouseH = 0;
-int EmVideoDisable = 0;
-int MyEvtQOutP = 0;
-int MyEvtQOutDone = 0;
+int CurMacLatitude = 0, CurMacLongitude = 0, CurMacDelta = 0;
+int WantMacReset = 0, WantMacInterrupt = 0;
+int CurMouseV = 0, CurMouseH = 0, EmVideoDisable = 0;
+int MyEvtQOutP = 0, MyEvtQOutDone = 0;
 
 void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { 
     *actL = (n < 8192) ? n : 8192; 
@@ -279,11 +270,8 @@ int PbufGetSize(void *p) { return 0; }
 // ---------------------------------------------------------
 // 6. FLOPPY DISK CONTROLLER
 // ---------------------------------------------------------
-int vSonyInsertedMask = 0;
-int vSonyRawMode = 0;
-int vSonyWritableMask = 0;
-int vSonyNewDiskWanted = 0;
-int vSonyNewDiskSize = 0;
+int vSonyInsertedMask = 0, vSonyRawMode = 0, vSonyWritableMask = 0;
+int vSonyNewDiskWanted = 0, vSonyNewDiskSize = 0;
 
 int AnyDiskInserted(void) { return vSonyInsertedMask != 0; }
 
@@ -299,10 +287,9 @@ int vSonyGetSize(int Drive_No, uint32_t *Sony_Count) {
 int vSonyTransfer(int IsWrite, uint8_t *Buffer, int Drive_No, uint32_t Sony_Start, uint32_t Sony_Count, uint32_t *Sony_ActCount) {
     if (Drive_No == 1 && mac_disk) {
         fseek(mac_disk, Sony_Start, SEEK_SET);
-        uint32_t bytes = 0;
-        if (IsWrite) bytes = fwrite(Buffer, 1, Sony_Count, mac_disk);
-        else bytes = fread(Buffer, 1, Sony_Count, mac_disk);
-        if (Sony_ActCount) *Sony_ActCount = bytes;
+        if (IsWrite) fwrite(Buffer, 1, Sony_Count, mac_disk);
+        else fread(Buffer, 1, Sony_Count, mac_disk);
+        if (Sony_ActCount) *Sony_ActCount = Sony_Count;
         return 0;
     }
     return -1;
@@ -318,8 +305,14 @@ void WarnMsgUnsupportedDisk(void) {}
 void DiskRevokeWritable(int d) {}
 
 // ---------------------------------------------------------
-// MAIN ENTRY POINT
+// MAIN ENTRY POINT (THE THREAD BYPASS)
 // ---------------------------------------------------------
+void* emulator_thread(void* arg) {
+    printf("Spawning 68k Core in 4MB Worker Thread...\n");
+    ProgramMain();
+    return NULL;
+}
+
 int main(int argc, char *argv[]) {
     freopen("vmac_debug.log", "w", stdout);
     freopen("vmac_debug.log", "a", stderr);
@@ -345,12 +338,6 @@ int main(int argc, char *argv[]) {
     fread(ROM, 1, rom_size, f);
     fclose(f);
 
-    printf("\n--- CRITICAL ADDRESS MAP ---\n");
-    printf("EmVideoDisable       : %p\n", (void*)&EmVideoDisable);
-    printf("ROM                  : %p\n", (void*)ROM);
-    printf("VidMem               : %p\n", (void*)VidMem);
-    printf("----------------------------\n\n");
-
     mac_disk = fopen("disk.img", "r+b");
     if (mac_disk) {
         vSonyInsertedMask = 1;
@@ -360,8 +347,21 @@ int main(int argc, char *argv[]) {
     Kindle_Init();
     InitTime();
     
-    printf("Handing execution over to 68k Core...\n");
-    ProgramMain();
+    // THE KERNEL BYPASS: Launch the emulator inside a custom POSIX thread 
+    // to guarantee it has enough stack space, ignoring the Kindle's limits.
+    pthread_t emu_thread;
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 4 * 1024 * 1024); 
+    
+    if (pthread_create(&emu_thread, &attr, emulator_thread, NULL) != 0) {
+        fprintf(stderr, "Fatal Error: Failed to spawn emulator thread!\n");
+        exit(1);
+    }
+    
+    // Wait for the emulator to finish
+    pthread_join(emu_thread, NULL);
+    pthread_attr_destroy(&attr);
 
     Kindle_CleanUp();
     if (mac_disk) fclose(mac_disk);
