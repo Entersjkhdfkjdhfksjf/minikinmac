@@ -24,16 +24,18 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE REAL FIX: Removed the space after -Os so it actually gets replaced!
-sed -i 's/-Os/-O2 -marm -mno-unaligned-access -fno-strict-aliasing -fno-jump-tables -fwrapv/g' Makefile
+# THE FIX: We forcefully delete -Os regardless of trailing spaces!
+sed -i 's/-Os//g' Makefile
 
-# 4MB Stack Limit to protect against Stack Overflows
-sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -Wl,-z,stack-size=4194304 /g' Makefile
+# Then we inject our ARM Safe Mode flags directly into the GCC definition so they can't be missed
+sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O1 -marm -mno-unaligned-access -fno-strict-aliasing -fno-delete-null-pointer-checks -fwrapv -fno-pie -no-pie /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
-sed -i 's|-L/usr/X11R6/lib -lX11|-L/tmp/FBInk-master -lfbink -lm|g' Makefile
-sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm|g' Makefile
+
+# 4MB Stack Limit to protect against Stack Overflows
+sed -i 's|-L/usr/X11R6/lib -lX11|-L/tmp/FBInk-master -lfbink -lm -Wl,-z,stack-size=4194304|g' Makefile
+sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm -Wl,-z,stack-size=4194304|g' Makefile
 sed -i 's/strip --strip-unneeded/armv7-unknown-linux-musleabihf-strip --strip-unneeded/g' Makefile
 
 echo "=> Cross-compiling the emulator..."
