@@ -24,11 +24,13 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE FIX: We forcefully delete -Os regardless of trailing spaces!
+# Delete any existing -Os optimization
 sed -i 's/-Os//g' Makefile
 
-# Then we inject our ARM Safe Mode flags directly into the GCC definition so they can't be missed
-sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O1 -marm -mno-unaligned-access -fno-strict-aliasing -fno-delete-null-pointer-checks -fwrapv -fno-pie -no-pie /g' Makefile
+# THE FINAL BOSS KILLER: -DM68K_USE_COMPUTED_GOTO=0
+# We forcefully pass this definition to the compiler to completely disable the 
+# corrupted array of function pointers causing the core to jump into .bss
+sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O1 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv -DM68K_USE_COMPUTED_GOTO=0 /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
