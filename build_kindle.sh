@@ -24,9 +24,8 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# THE FIX: -fno-jump-tables forces safe CPU branching!
-# We keep -O2 for speed, and -fwrapv ensures safe integer overflows in the emulator
-sed -i 's/-Os /-O2 -marm -mno-unaligned-access -fno-strict-aliasing -fno-jump-tables -fwrapv /g' Makefile
+# THE REAL FIX: Removed the space after -Os so it actually gets replaced!
+sed -i 's/-Os/-O2 -marm -mno-unaligned-access -fno-strict-aliasing -fno-jump-tables -fwrapv/g' Makefile
 
 # 4MB Stack Limit to protect against Stack Overflows
 sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -Wl,-z,stack-size=4194304 /g' Makefile
