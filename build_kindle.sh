@@ -28,8 +28,8 @@ echo "=> Patching OS Glue..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
 echo "=> NUKING Global Registers and Computed Gotos in ALL Config Headers..."
-# By appending to the BOTTOM of every header, we guarantee our safety patches override the defaults!
-for header in src/*.h; do
+# THE FIX: We must target the auto-generated cfg/ directory in addition to src/ !
+for header in src/*.h cfg/*.h; do
     if [ -f "$header" ]; then
         echo "" >> "$header"
         echo "#undef M68K_USE_GLOBAL_REGS" >> "$header"
@@ -58,4 +58,3 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
-
