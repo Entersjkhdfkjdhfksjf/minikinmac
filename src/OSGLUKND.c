@@ -23,27 +23,26 @@
 #define MAC_WIDTH  1440
 #define MAC_HEIGHT 1056
 
-// THE FIX: Forcing 8-byte alignment on ALL globals to prevent Cortex-A9 LDRD/STRD hardware faults
-static int fbfd __attribute__((aligned(8))) = -1;
-static int touch_fd __attribute__((aligned(8))) = -1;
-static uint8_t *fb_mem __attribute__((aligned(8))) = NULL;
-static size_t fb_size __attribute__((aligned(8))) = 0;
-static FBInkConfig fb_cfg __attribute__((aligned(8))) = {0};
+static int fbfd = -1;
+static int touch_fd = -1;
+static uint8_t *fb_mem = NULL;
+static size_t fb_size = 0;
+static FBInkConfig fb_cfg = {0};
 
-static int kindle_stride __attribute__((aligned(8))) = 1088;
-static int physical_offset __attribute__((aligned(8))) = 0;
+static int kindle_stride = 1088;
+static int physical_offset = 0;
 
 extern void EmulationReserveAlloc(void);
 extern void ProgramMain(void);
 extern uint8_t *VidMem;
 
-char *ROM __attribute__((aligned(8))) = NULL;
-FILE *mac_disk __attribute__((aligned(8))) = NULL;
-static int frame_skip_counter __attribute__((aligned(8))) = 0;
-static uint8_t *RawAllocBlock __attribute__((aligned(8))) = NULL;
+char *ROM = NULL;
+FILE *mac_disk = NULL;
+static int frame_skip_counter = 0;
+static uint8_t *RawAllocBlock = NULL;
 
-static uint64_t dummy_audio_buffer[8192 / 8] __attribute__((aligned(8)));
-char vSonyNewDiskName[256] __attribute__((aligned(8)));
+static uint64_t dummy_audio_buffer[8192 / 8];
+char vSonyNewDiskName[256];
 
 // ---------------------------------------------------------
 // 0. SIGNAL INTERCEPTOR
@@ -64,7 +63,7 @@ void fatal_crash_handler(int sig, siginfo_t *si, void *unused) {
     } else if (si->si_addr == NULL) {
         fprintf(stderr, "Diagnosis: Null Pointer Dereference\n");
     } else {
-        fprintf(stderr, "Diagnosis: Jump Table or LDRD Alignment Crash\n");
+        fprintf(stderr, "Diagnosis: Core PC Corruption or Struct Mismatch\n");
     }
     fprintf(stderr, "=========================================\n\n");
     fflush(stderr);
@@ -147,8 +146,8 @@ void Screen_OutputFrame(void) {}
 // ---------------------------------------------------------
 // 3. CORE MEMORY ALLOCATOR 
 // ---------------------------------------------------------
-static size_t ReserveAllocOffset __attribute__((aligned(8))) = 0;
-static uint8_t *ReserveAllocBigBlock __attribute__((aligned(8))) = NULL;
+static size_t ReserveAllocOffset = 0;
+static uint8_t *ReserveAllocBigBlock = NULL;
 
 void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) {
     size_t alignment = 1 << align;
@@ -198,9 +197,9 @@ void Kindle_CleanUp(void) {
     if (RawAllocBlock) free(RawAllocBlock);
 }
 
-unsigned int TrueEmulatedTime __attribute__((aligned(8))) = 0;
-unsigned int OnTrueTime __attribute__((aligned(8))) = 1;
-static struct timespec last_time __attribute__((aligned(8)));
+unsigned int TrueEmulatedTime = 0;
+unsigned int OnTrueTime = 1;
+static struct timespec last_time;
 
 void InitTime(void) {
     clock_gettime(CLOCK_MONOTONIC, &last_time);
@@ -209,7 +208,7 @@ void InitTime(void) {
 }
 
 void UpdateTime(void) {
-    struct timespec now __attribute__((aligned(8)));
+    struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     
     long long elapsed_usec = ((long long)(now.tv_sec - last_time.tv_sec) * 1000000LL) + 
@@ -242,25 +241,25 @@ void WaitForNextTick(void) {
 }
 
 // ---------------------------------------------------------
-// 5. CORE STUBS & GLOBALS (BULLETPROOF ALIGNMENT)
+// 5. CORE STUBS & GLOBALS
 // ---------------------------------------------------------
-int QuietTime __attribute__((aligned(8))) = 0;
-int QuietSubTicks __attribute__((aligned(8))) = 0;
-int SpeedValue __attribute__((aligned(8))) = 1;
-int WantNotAutoSlow __attribute__((aligned(8))) = 0;
-int EmLagTime __attribute__((aligned(8))) = 0;
-int ForceMacOff __attribute__((aligned(8))) = 0;
-unsigned int CurMacDateInSeconds __attribute__((aligned(8))) = 3800000000;
-int CurMacLatitude __attribute__((aligned(8))) = 0;
-int CurMacLongitude __attribute__((aligned(8))) = 0;
-int CurMacDelta __attribute__((aligned(8))) = 0;
-int WantMacReset __attribute__((aligned(8))) = 0;
-int WantMacInterrupt __attribute__((aligned(8))) = 0;
-int CurMouseV __attribute__((aligned(8))) = 0;
-int CurMouseH __attribute__((aligned(8))) = 0;
-int EmVideoDisable __attribute__((aligned(8))) = 0;
-int MyEvtQOutP __attribute__((aligned(8))) = 0;
-int MyEvtQOutDone __attribute__((aligned(8))) = 0;
+int QuietTime = 0;
+int QuietSubTicks = 0;
+int SpeedValue = 1;
+int WantNotAutoSlow = 0;
+int EmLagTime = 0;
+int ForceMacOff = 0;
+unsigned int CurMacDateInSeconds = 3800000000;
+int CurMacLatitude = 0;
+int CurMacLongitude = 0;
+int CurMacDelta = 0;
+int WantMacReset = 0;
+int WantMacInterrupt = 0;
+int CurMouseV = 0;
+int CurMouseH = 0;
+int EmVideoDisable = 0;
+int MyEvtQOutP = 0;
+int MyEvtQOutDone = 0;
 
 void* MySound_BeginWrite(uint32_t n, uint32_t *actL) { 
     *actL = (n < 8192) ? n : 8192; 
@@ -280,11 +279,11 @@ int PbufGetSize(void *p) { return 0; }
 // ---------------------------------------------------------
 // 6. FLOPPY DISK CONTROLLER
 // ---------------------------------------------------------
-int vSonyInsertedMask __attribute__((aligned(8))) = 0;
-int vSonyRawMode __attribute__((aligned(8))) = 0;
-int vSonyWritableMask __attribute__((aligned(8))) = 0;
-int vSonyNewDiskWanted __attribute__((aligned(8))) = 0;
-int vSonyNewDiskSize __attribute__((aligned(8))) = 0;
+int vSonyInsertedMask = 0;
+int vSonyRawMode = 0;
+int vSonyWritableMask = 0;
+int vSonyNewDiskWanted = 0;
+int vSonyNewDiskSize = 0;
 
 int AnyDiskInserted(void) { return vSonyInsertedMask != 0; }
 
@@ -347,9 +346,7 @@ int main(int argc, char *argv[]) {
     fclose(f);
 
     printf("\n--- CRITICAL ADDRESS MAP ---\n");
-    printf("CurMacLongitude      : %p\n", (void*)&CurMacLongitude);
-    printf("last_time            : %p\n", (void*)&last_time);
-    printf("dummy_audio_buffer   : %p\n", (void*)dummy_audio_buffer);
+    printf("EmVideoDisable       : %p\n", (void*)&EmVideoDisable);
     printf("ROM                  : %p\n", (void*)ROM);
     printf("VidMem               : %p\n", (void*)VidMem);
     printf("----------------------------\n\n");
