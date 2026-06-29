@@ -27,10 +27,10 @@ rm -rf bld minivmac
 echo "=> Patching OS Glue..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-echo "=> NUKING Global Registers and Computed Gotos in-place..."
-# THE FIX: Surgically replace the '1' with a '0' directly inside the original code
-find src cfg -type f \( -name "*.h" -o -name "*.c" \) -exec sed -i 's/M68K_USE_GLOBAL_REGS 1/M68K_USE_GLOBAL_REGS 0/g' {} +
-find src cfg -type f \( -name "*.h" -o -name "*.c" \) -exec sed -i 's/M68K_USE_COMPUTED_GOTO 1/M68K_USE_COMPUTED_GOTO 0/g' {} +
+echo "=> NUKING Global Registers and Computed Gotos (Nuclear Rename)..."
+# THE FIX: Completely rename the macros everywhere so they evaluate to undefined/false!
+find src cfg -type f -exec sed -i 's/M68K_USE_GLOBAL_REGS/M68K_DISABLED_GLOBAL_REGS/g' {} +
+find src cfg -type f -exec sed -i 's/M68K_USE_COMPUTED_GOTO/M68K_DISABLED_COMPUTED_GOTO/g' {} +
 
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 # Remove -Os
@@ -51,3 +51,4 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
+
