@@ -1,4 +1,3 @@
-
 #!/bin/bash
 # build_kindle.sh
 
@@ -22,22 +21,21 @@ echo "=> Generating core configuration..."
 chmod +x setup.sh
 
 echo "=> Preparing build environment..."
-# Only delete old compiled binaries, NEVER the src folder!
 rm -rf bld minivmac
 ./setup.sh
 
 echo "=> Patching OS Glue..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-echo "=> Disabling dangerous Global Registers and Computed Gotos..."
-for file in src/MINEM68K.c src/M68KITAB.c src/PROGMAIN.c; do
-    if [ -f "$file" ]; then
-        echo "#undef M68K_USE_GLOBAL_REGS" > temp_hdr
-        echo "#define M68K_USE_GLOBAL_REGS 0" >> temp_hdr
-        echo "#undef M68K_USE_COMPUTED_GOTO" >> temp_hdr
-        echo "#define M68K_USE_COMPUTED_GOTO 0" >> temp_hdr
-        cat "$file" >> temp_hdr
-        mv temp_hdr "$file"
+echo "=> NUKING Global Registers and Computed Gotos in ALL Config Headers..."
+# By appending to the BOTTOM of every header, we guarantee our safety patches override the defaults!
+for header in src/*.h; do
+    if [ -f "$header" ]; then
+        echo "" >> "$header"
+        echo "#undef M68K_USE_GLOBAL_REGS" >> "$header"
+        echo "#define M68K_USE_GLOBAL_REGS 0" >> "$header"
+        echo "#undef M68K_USE_COMPUTED_GOTO" >> "$header"
+        echo "#define M68K_USE_COMPUTED_GOTO 0" >> "$header"
     fi
 done
 
@@ -45,8 +43,8 @@ echo "=> Patching Makefile for Musl Static Hardware Build..."
 # Remove -Os
 sed -i 's/-Os//g' Makefile
 
-# Inject safe compiler flags (no jump tables, no global registers)
-sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O2 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv /g' Makefile
+# Inject safe compiler flags (no jump tables, safe arm casting)
+sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O2 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv -fno-jump-tables /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
@@ -60,3 +58,5 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
+[cite_start]
+http://googleusercontent.com/immersive_entry_chip/0
