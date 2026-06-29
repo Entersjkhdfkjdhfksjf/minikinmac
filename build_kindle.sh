@@ -24,22 +24,19 @@ chmod +x setup.sh
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# Delete any existing -Os optimization
-sed -i 's/-Os//g' Makefile
+# Swap -Os for safe ARM compilation (-O2 for speed, disable strict aliasing)
+sed -i 's/-Os/-O2 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv/g' Makefile
 
-# THE FINAL BOSS KILLER: -DM68K_USE_COMPUTED_GOTO=0
-sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O1 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv -DM68K_USE_COMPUTED_GOTO=0 /g' Makefile
-
+sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static /g' Makefile
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
 
-# 4MB Stack Limit to protect against Stack Overflows
-sed -i 's|-L/usr/X11R6/lib -lX11|-L/tmp/FBInk-master -lfbink -lm -Wl,-z,stack-size=4194304|g' Makefile
-sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm -Wl,-z,stack-size=4194304|g' Makefile
+# Inject the POSIX threading library (-lpthread)
+sed -i 's|-L/usr/X11R6/lib -lX11|-L/tmp/FBInk-master -lfbink -lm -lpthread|g' Makefile
+sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm -lpthread|g' Makefile
 sed -i 's/strip --strip-unneeded/armv7-unknown-linux-musleabihf-strip --strip-unneeded/g' Makefile
 
 echo "=> Cross-compiling the emulator..."
-make clean  # FORCES A FULL REBUILD
 make
 
 echo "=> Build successful! Binary is ready for deployment."
