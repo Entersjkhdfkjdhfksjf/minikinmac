@@ -58,5 +58,4 @@ echo "=> Cross-compiling the emulator..."
 make
 
 echo "=> Build successful! Binary is ready for deployment."
-[cite_start]
-http://googleusercontent.com/immersive_entry_chip/0
+
