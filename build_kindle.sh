@@ -27,17 +27,10 @@ rm -rf bld minivmac
 echo "=> Patching OS Glue..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-echo "=> NUKING Global Registers and Computed Gotos in ALL Config Headers..."
-# THE FIX: We must target the auto-generated cfg/ directory in addition to src/ !
-for header in src/*.h cfg/*.h; do
-    if [ -f "$header" ]; then
-        echo "" >> "$header"
-        echo "#undef M68K_USE_GLOBAL_REGS" >> "$header"
-        echo "#define M68K_USE_GLOBAL_REGS 0" >> "$header"
-        echo "#undef M68K_USE_COMPUTED_GOTO" >> "$header"
-        echo "#define M68K_USE_COMPUTED_GOTO 0" >> "$header"
-    fi
-done
+echo "=> NUKING Global Registers and Computed Gotos in-place..."
+# THE FIX: Surgically replace the '1' with a '0' directly inside the original code
+find src cfg -type f \( -name "*.h" -o -name "*.c" \) -exec sed -i 's/M68K_USE_GLOBAL_REGS 1/M68K_USE_GLOBAL_REGS 0/g' {} +
+find src cfg -type f \( -name "*.h" -o -name "*.c" \) -exec sed -i 's/M68K_USE_COMPUTED_GOTO 1/M68K_USE_COMPUTED_GOTO 0/g' {} +
 
 echo "=> Patching Makefile for Musl Static Hardware Build..."
 # Remove -Os
