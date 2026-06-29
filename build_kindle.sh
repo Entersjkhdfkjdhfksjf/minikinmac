@@ -28,8 +28,6 @@ sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 sed -i 's/-Os//g' Makefile
 
 # THE FINAL BOSS KILLER: -DM68K_USE_COMPUTED_GOTO=0
-# We forcefully pass this definition to the compiler to completely disable the 
-# corrupted array of function pointers causing the core to jump into .bss
 sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O1 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv -DM68K_USE_COMPUTED_GOTO=0 /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
@@ -41,6 +39,7 @@ sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm -Wl,-z,stack-size=4194304|g' Mak
 sed -i 's/strip --strip-unneeded/armv7-unknown-linux-musleabihf-strip --strip-unneeded/g' Makefile
 
 echo "=> Cross-compiling the emulator..."
+make clean  # FORCES A FULL REBUILD
 make
 
 echo "=> Build successful! Binary is ready for deployment."
