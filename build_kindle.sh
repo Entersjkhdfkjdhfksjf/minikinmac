@@ -19,19 +19,37 @@ gcc setup/tool.c -o setup_t
 echo "=> Generating core configuration..."
 ./setup_t -t larm -hres 1440 -vres 1056 -sound 0 > setup.sh
 chmod +x setup.sh
+
+echo "=> Forcing a clean build environment..."
+rm -rf bld minivmac cfg src
 ./setup.sh
 
-echo "=> Patching Makefile for Musl Static Hardware Build..."
+echo "=> Patching OS Glue..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
-# Swap -Os for safe ARM compilation (-O2 for speed, disable strict aliasing)
-sed -i 's/-Os/-O2 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv/g' Makefile
+echo "=> Disabling dangerous Global Registers and Computed Gotos..."
+for file in src/MINEM68K.c src/M68KITAB.c src/PROGMAIN.c; do
+    if [ -f "$file" ]; then
+        echo "#undef M68K_USE_GLOBAL_REGS" > temp_hdr
+        echo "#define M68K_USE_GLOBAL_REGS 0" >> temp_hdr
+        echo "#undef M68K_USE_COMPUTED_GOTO" >> temp_hdr
+        echo "#define M68K_USE_COMPUTED_GOTO 0" >> temp_hdr
+        cat "$file" >> temp_hdr
+        mv temp_hdr "$file"
+    fi
+done
 
-sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static /g' Makefile
+echo "=> Patching Makefile for Musl Static Hardware Build..."
+# Remove -Os
+sed -i 's/-Os//g' Makefile
+
+# Inject safe compiler flags
+sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O2 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv /g' Makefile
+
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
 sed -i 's|-I/usr/X11R6/include||g' Makefile
 
-# Inject the POSIX threading library (-lpthread)
+# Keep POSIX threads for stack bypass
 sed -i 's|-L/usr/X11R6/lib -lX11|-L/tmp/FBInk-master -lfbink -lm -lpthread|g' Makefile
 sed -i 's|-lX11|-L/tmp/FBInk-master -lfbink -lm -lpthread|g' Makefile
 sed -i 's/strip --strip-unneeded/armv7-unknown-linux-musleabihf-strip --strip-unneeded/g' Makefile
