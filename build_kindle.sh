@@ -1,3 +1,4 @@
+
 #!/bin/bash
 # build_kindle.sh
 
@@ -20,8 +21,9 @@ echo "=> Generating core configuration..."
 ./setup_t -t larm -hres 1440 -vres 1056 -sound 0 > setup.sh
 chmod +x setup.sh
 
-echo "=> Forcing a clean build environment..."
-rm -rf bld minivmac cfg src
+echo "=> Preparing build environment..."
+# Only delete old compiled binaries, NEVER the src folder!
+rm -rf bld minivmac
 ./setup.sh
 
 echo "=> Patching OS Glue..."
@@ -43,7 +45,7 @@ echo "=> Patching Makefile for Musl Static Hardware Build..."
 # Remove -Os
 sed -i 's/-Os//g' Makefile
 
-# Inject safe compiler flags
+# Inject safe compiler flags (no jump tables, no global registers)
 sed -i 's/gcc /armv7-unknown-linux-musleabihf-gcc -mcpu=cortex-a9 -mfpu=vfpv3 -mfloat-abi=hard -static -O2 -marm -mno-unaligned-access -fno-strict-aliasing -fwrapv /g' Makefile
 
 sed -i 's|-Isrc/|-Isrc/ -I/tmp/FBInk-master|g' Makefile
