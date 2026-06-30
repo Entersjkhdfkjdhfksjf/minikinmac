@@ -1,6 +1,7 @@
 /*
  * OSGLUKND.c
  * Bare-metal Platform Abstraction Layer for Kindle PW3 (i.MX6)
+ * FIXED: Proper memory alignment, bounds checking, and error handling
  */
 
 #include "fbink.h"
@@ -23,6 +24,9 @@
 #define TRUE_KINDLE_HEIGHT 1448
 #define MAC_WIDTH  1440
 #define MAC_HEIGHT 1056
+
+#define ALLOC_PAGE_SIZE 4096
+#define MAX_EMULATION_SIZE (64 * 1024 * 1024)  /* 64MB max allocation */
 
 static int fbfd = -1;
 static int touch_fd = -1;
@@ -99,6 +103,12 @@ void Kindle_Init(void) {
     }
 
     fb_mem = (uint8_t*)mmap(NULL, fb_size, PROT_READ | PROT_WRITE, MAP_SHARED, fbfd, 0);
+    if (fb_mem == MAP_FAILED) {
+        fprintf(stderr, "ERROR: Failed to mmap framebuffer\n");
+        fb_mem = NULL;
+        return;
+    }
+    
     touch_fd = open("/dev/input/event1", O_RDONLY | O_NONBLOCK);
 }
 
@@ -121,7 +131,10 @@ void Kindle_RenderRegion(int top, int left, int bottom, int right) {
             int k_y = MAC_WIDTH - 1 - col;
             int fb_idx = physical_offset + (k_y * kindle_stride) + k_x;
             
-            fb_mem[fb_idx] = ((VidMem[byte_idx] >> bit_idx) & 1) ? 0x00 : 0xFF;
+            /* Bounds check framebuffer access */
+            if (fb_idx >= 0 && fb_idx < (int)fb_size) {
+                fb_mem[fb_idx] = ((VidMem[byte_idx] >> bit_idx) & 1) ? 0x00 : 0xFF;
+            }
         }
     }
 
@@ -145,39 +158,123 @@ void DoneWithDrawingForTick(void) {
 void Screen_OutputFrame(void) {}
 
 // ---------------------------------------------------------
-// 3. CORE MEMORY ALLOCATOR 
+// 3. CORE MEMORY ALLOCATOR (FIXED)
 // ---------------------------------------------------------
 static size_t ReserveAllocOffset = 0;
 static uint8_t *ReserveAllocBigBlock = NULL;
+static size_t ReserveAllocTotalSize = 0;
 
+/* First pass: calculate required size */
 void ReserveAllocOneBlock(void **p, size_t s, int align, int clear) {
-    size_t alignment = 1 << align;
-    size_t remainder = ReserveAllocOffset % alignment;
-    if (remainder != 0) ReserveAllocOffset += (alignment - remainder);
-
-    if (ReserveAllocBigBlock != NULL) {
-        *p = (void*)(ReserveAllocBigBlock + ReserveAllocOffset);
-        if (clear && *p) memset(*p, 0, s);
+    if (p == NULL) {
+        fprintf(stderr, "ERROR: ReserveAllocOneBlock called with NULL pointer\n");
+        exit(1);
     }
+    
+    /* Calculate alignment requirement */
+    size_t alignment = 1 << align;
+    if (alignment == 0 || alignment > ALLOC_PAGE_SIZE) {
+        fprintf(stderr, "ERROR: Invalid alignment value: %d\n", align);
+        exit(1);
+    }
+    
+    /* Calculate padding needed for alignment */
+    size_t remainder = ReserveAllocOffset % alignment;
+    if (remainder != 0) {
+        ReserveAllocOffset += (alignment - remainder);
+    }
+    
+    /* Track requested allocation for bounds checking */
+    if (ReserveAllocBigBlock != NULL) {
+        /* Second pass: actually allocate from the big block */
+        if (ReserveAllocOffset + s > ReserveAllocTotalSize) {
+            fprintf(stderr, "ERROR: Allocation overflow! Requested %zu + %zu, but only %zu available\n",
+                    ReserveAllocOffset, s, ReserveAllocTotalSize);
+            exit(1);
+        }
+        
+        *p = (void*)(ReserveAllocBigBlock + ReserveAllocOffset);
+        if (clear && *p) {
+            memset(*p, 0, s);
+        }
+    } else {
+        /* First pass: just track size, set pointer to NULL for validation */
+        *p = NULL;
+    }
+    
     ReserveAllocOffset += s;
 }
 
 void AllocMacMemory(long rom_size) {
+    if (rom_size <= 0 || rom_size > MAX_EMULATION_SIZE) {
+        fprintf(stderr, "ERROR: Invalid ROM size: %ld\n", rom_size);
+        exit(1);
+    }
+
+    /* ===== PASS 1: Calculate total size needed ===== */
+    fprintf(stderr, "[Allocator] Pass 1: Calculating total allocation size...\n");
     ReserveAllocOffset = 0;
     ReserveAllocBigBlock = NULL;
+    
     ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
     EmulationReserveAlloc();
+    
+    /* Store the calculated total size */
+    size_t total_needed = ReserveAllocOffset;
+    fprintf(stderr, "[Allocator] Pass 1 complete: Need %zu bytes (0x%zx)\n", 
+            total_needed, total_needed);
+    
+    if (total_needed == 0) {
+        fprintf(stderr, "ERROR: Zero bytes allocated in pass 1\n");
+        exit(1);
+    }
+    
+    if (total_needed > MAX_EMULATION_SIZE) {
+        fprintf(stderr, "ERROR: Required allocation (%zu) exceeds max (%u)\n",
+                total_needed, MAX_EMULATION_SIZE);
+        exit(1);
+    }
 
-    RawAllocBlock = (uint8_t*)calloc(1, ReserveAllocOffset + 4096);
-    if (!RawAllocBlock) exit(1);
+    /* ===== ALLOCATE: Get the memory block ===== */
+    fprintf(stderr, "[Allocator] Allocating %zu bytes + %u byte page alignment buffer...\n",
+            total_needed, ALLOC_PAGE_SIZE);
+    
+    RawAllocBlock = (uint8_t*)calloc(1, total_needed + ALLOC_PAGE_SIZE);
+    if (!RawAllocBlock) {
+        fprintf(stderr, "ERROR: calloc failed for %zu bytes\n", total_needed + ALLOC_PAGE_SIZE);
+        exit(1);
+    }
+    
+    fprintf(stderr, "[Allocator] Allocation successful, raw block at %p\n", (void*)RawAllocBlock);
 
+    /* ===== ALIGN: Calculate aligned start pointer ===== */
     size_t rptr = (size_t)RawAllocBlock;
-    size_t rem = rptr % 4096;
-    ReserveAllocBigBlock = RawAllocBlock + (4096 - rem);
+    size_t rem = rptr % ALLOC_PAGE_SIZE;
+    size_t alignment_offset = (rem == 0) ? 0 : (ALLOC_PAGE_SIZE - rem);
+    
+    ReserveAllocBigBlock = RawAllocBlock + alignment_offset;
+    ReserveAllocTotalSize = total_needed;
+    
+    fprintf(stderr, "[Allocator] Aligned block at %p (offset +%zu)\n", 
+            (void*)ReserveAllocBigBlock, alignment_offset);
 
+    /* ===== PASS 2: Actually allocate from the aligned block ===== */
+    fprintf(stderr, "[Allocator] Pass 2: Assigning pointers and clearing memory...\n");
     ReserveAllocOffset = 0;
+    
     ReserveAllocOneBlock((void**)&ROM, rom_size, 5, 0);
+    fprintf(stderr, "[Allocator] ROM: %p (size %ld)\n", (void*)ROM, rom_size);
+    
     EmulationReserveAlloc();
+    
+    fprintf(stderr, "[Allocator] Pass 2 complete: Final offset %zu bytes\n", ReserveAllocOffset);
+    
+    if (ReserveAllocOffset != total_needed) {
+        fprintf(stderr, "WARNING: Pass 2 offset mismatch! Expected %zu, got %zu\n",
+                total_needed, ReserveAllocOffset);
+    }
+    
+    fprintf(stderr, "[Allocator] 68k core memory initialization SUCCESS\n");
 }
 
 // ---------------------------------------------------------
@@ -192,10 +289,12 @@ void Kindle_PollInput(void) {
 void Kindle_CleanUp(void) {
     if (touch_fd >= 0) close(touch_fd);
     if (fbfd >= 0) {
-        if (fb_mem) munmap(fb_mem, fb_size);
+        if (fb_mem && fb_mem != MAP_FAILED) munmap(fb_mem, fb_size);
         fbink_close(fbfd);
     }
     if (RawAllocBlock) free(RawAllocBlock);
+    RawAllocBlock = NULL;
+    ReserveAllocBigBlock = NULL;
 }
 
 unsigned int TrueEmulatedTime = 0;
@@ -329,26 +428,56 @@ int main(int argc, char *argv[]) {
     printf("Mini vMac for Kindle: Initialization Begun.\n");
     
     FILE *f = fopen("vMac.ROM", "rb");
-    if (!f) return 1;
+    if (!f) {
+        fprintf(stderr, "ERROR: Could not open vMac.ROM\n");
+        return 1;
+    }
     fseek(f, 0, SEEK_END);
     long rom_size = ftell(f);
     fseek(f, 0, SEEK_SET);
+    
+    if (rom_size <= 0) {
+        fprintf(stderr, "ERROR: Invalid ROM size: %ld\n", rom_size);
+        fclose(f);
+        return 1;
+    }
 
+    printf("Loading ROM (%ld bytes)...\n", rom_size);
     AllocMacMemory(rom_size);
-    fread(ROM, 1, rom_size, f);
+    
+    if (!ROM) {
+        fprintf(stderr, "ERROR: ROM allocation failed\n");
+        fclose(f);
+        return 1;
+    }
+    
+    size_t bytes_read = fread(ROM, 1, rom_size, f);
     fclose(f);
+    
+    if ((long)bytes_read != rom_size) {
+        fprintf(stderr, "ERROR: ROM read failed (expected %ld, got %zu)\n", rom_size, bytes_read);
+        return 1;
+    }
+    
+    printf("ROM loaded successfully.\n");
 
     mac_disk = fopen("disk.img", "r+b");
     if (mac_disk) {
         vSonyInsertedMask = 1;
         vSonyWritableMask = 1;
+        printf("Disk image loaded.\n");
     }
 
     Kindle_Init();
+    if (!fb_mem) {
+        fprintf(stderr, "ERROR: Kindle display initialization failed\n");
+        return 1;
+    }
+    
     InitTime();
     
-    // THE KERNEL BYPASS: Launch the emulator inside a custom POSIX thread 
-    // to guarantee it has enough stack space, ignoring the Kindle's limits.
+    /* THE KERNEL BYPASS: Launch the emulator inside a custom POSIX thread 
+       to guarantee it has enough stack space, ignoring the Kindle's limits. */
     pthread_t emu_thread;
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -359,11 +488,13 @@ int main(int argc, char *argv[]) {
         exit(1);
     }
     
-    // Wait for the emulator to finish
+    /* Wait for the emulator to finish */
     pthread_join(emu_thread, NULL);
     pthread_attr_destroy(&attr);
 
     Kindle_CleanUp();
     if (mac_disk) fclose(mac_disk);
+    
+    printf("Emulator cleanly shut down.\n");
     return 0;
 }
