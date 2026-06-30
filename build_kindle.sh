@@ -32,9 +32,9 @@ echo "=> Patching OS Glue layer..."
 sed -i 's/OSGLUXWN/OSGLUKND/g' Makefile
 
 echo "=> NUKING Global Registers and Computed Gotos (Value Overwrite)..."
-# CRITICAL FIX: We overwrite the macro to 0. Renaming it is not enough!
-grep -rl "M68K_USE_GLOBAL_REGS" src/ cfg/ | xargs sed -i 's/.*#define.*M68K_USE_GLOBAL_REGS.*/#define M68K_USE_GLOBAL_REGS 0/g'
-grep -rl "M68K_USE_COMPUTED_GOTO" src/ cfg/ | xargs sed -i 's/.*#define.*M68K_USE_COMPUTED_GOTO.*/#define M68K_USE_COMPUTED_GOTO 0/g'
+# CRITICAL FIX: Use 'find -exec' instead of 'xargs' to avoid crashing if the macro doesn't exist!
+find src cfg -type f -exec sed -i 's/.*#define.*M68K_USE_GLOBAL_REGS.*/#define M68K_USE_GLOBAL_REGS 0/g' {} +
+find src cfg -type f -exec sed -i 's/.*#define.*M68K_USE_COMPUTED_GOTO.*/#define M68K_USE_COMPUTED_GOTO 0/g' {} +
 
 # ===== COMPILER FLAGS =====
 echo "=> Configuring compiler flags..."
@@ -62,3 +62,4 @@ echo "=> Cross-compiling..."
 make || { echo "ERROR: Compilation failed"; exit 1; }
 
 echo "=> Build successful! Binary is ready for deployment."
+
